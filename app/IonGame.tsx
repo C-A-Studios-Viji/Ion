@@ -640,13 +640,13 @@ export default function IonGame() {
     const flashTarget = new THREE.Object3D();
     flashTarget.position.set(0, -0.08, -12);
     camera.add(flashTarget);
-    const flashlight = new THREE.SpotLight(0xfff3d6, 820, 95, 1.08, 0.82, 0.72);
+    const flashlight = new THREE.SpotLight(0xe5f9ff, 92, 31, 0.44, 0.64, 1.35);
     flashlight.castShadow = true;
     flashlight.shadow.mapSize.set(768, 768);
     flashlight.position.set(0.08, -0.08, 0);
     flashlight.target = flashTarget;
     camera.add(flashlight);
-    const luxuryLight = new THREE.PointLight(0xffe8bd, 175, 72, 1.15);
+    const luxuryLight = new THREE.PointLight(0xd8f5ff, 0, 14, 1.8);
     luxuryLight.position.set(0, 1.15, -0.6);
     camera.add(luxuryLight);
     const gunModel = createGunModel();
@@ -1560,12 +1560,12 @@ export default function IonGame() {
         runtime.battery = Math.max(0, runtime.battery - dt * 0.42 * drainScale);
         if (runtime.battery <= 0) { runtime.flashlightOn = false; runtime.flashlight.visible = false; notify("FLASHLIGHT BATTERY DEPLETED"); }
       }
-      const lightStrength = runtime.lightInfusion === "quartz" ? 1150 : runtime.lightInfusion === "citrine" ? 1020 : runtime.lightInfusion === "corrupted" ? 1320 : 880;
-      runtime.flashlight.intensity = lightStrength * (0.86 + runtime.battery / 520); runtime.flashlight.distance = 110;
-      runtime.flashlight.angle = 1.12; runtime.flashlight.penumbra = 0.84;
-      runtime.luxuryLight.intensity = runtime.flashlightOn ? 165 + (runtime.lightInfusion === "quartz" ? 80 : 0) : 0;
-      runtime.luxuryLight.distance = 78;
-      renderer.toneMappingExposure = runtime.flashlightOn ? 1.34 : runtime.chaseRoom ? 1.22 : Math.max(0.52, 0.76 - runtime.tier * 0.028);
+      const lightStrength = runtime.lightInfusion === "quartz" ? 148 : runtime.lightInfusion === "citrine" ? 118 : runtime.lightInfusion === "corrupted" ? 178 : 92;
+      runtime.flashlight.intensity = lightStrength * (0.72 + runtime.battery / 360);
+      runtime.flashlight.distance = runtime.lightInfusion === "quartz" ? 42 : 31;
+      runtime.flashlight.angle = runtime.lightInfusion === "quartz" ? 0.56 : 0.44; runtime.flashlight.penumbra = 0.64;
+      runtime.luxuryLight.intensity = 0;
+      renderer.toneMappingExposure = runtime.chaseRoom ? 1.22 : Math.max(0.52, 0.76 - runtime.tier * 0.028);
       if (runtime.player.z < -runtime.roomLength / 2 - 0.82 && runtime.doorProgress > 0.82) { runtime.transition = 1; runtime.transitionDirection = 1; }
     }
     function updateEnemies(dt: number) {
@@ -1695,8 +1695,10 @@ export default function IonGame() {
         light.intensity = failure ? 0.35 : 12 + Math.sin(performance.now() * 0.003 + index) * 3; });
       if (runtime.doorOpening) {
         if (!runtime.doorCreaked) { runtime.doorCreaked = true; runtime.audio?.creak(); if (runtime.doorPers) runtime.doorPers.visible = true; }
-        runtime.doorProgress = Math.min(1, runtime.doorProgress + dt * 0.48);
-        runtime.doorPanels[0]?.position.set(-1.19 - runtime.doorProgress * 1.28, 2.12, 0); runtime.doorPanels[1]?.position.set(1.19 + runtime.doorProgress * 1.28, 2.12, 0);
+        runtime.doorProgress = Math.min(1, runtime.doorProgress + dt * 0.24);
+        const lift = THREE.MathUtils.smoothstep(runtime.doorProgress, 0, 1) * 4.65;
+        runtime.doorPanels[0]?.position.set(-1.19, 2.12 + lift, 0);
+        runtime.doorPanels[1]?.position.set(1.19, 2.12 + lift, 0);
         if (runtime.doorPers) {
           runtime.doorPers.position.x = 3.55 - Math.sin(runtime.doorProgress * Math.PI) * 1.5;
           runtime.doorPers.rotation.y = -Math.PI / 2 + runtime.doorProgress * Math.PI * 0.55;
