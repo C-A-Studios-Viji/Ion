@@ -1059,8 +1059,8 @@ export default function IonGame() {
       const left = addMesh(new THREE.BoxGeometry(2.36, 4.1, 0.24), panelMaterial, new THREE.Vector3(-1.19, 2.12, 0), undefined, group);
       const right = addMesh(new THREE.BoxGeometry(2.36, 4.1, 0.24), panelMaterial, new THREE.Vector3(1.19, 2.12, 0), undefined, group);
       runtime.doorPanels = [left, right];
-      const strip = addMesh(new THREE.BoxGeometry(0.12, 3.35, 0.08), glowMaterial, new THREE.Vector3(0, 2.15, -0.19), undefined, group);
-      strip.userData.doorIndicator = true;
+      const strip = addMesh(new THREE.BoxGeometry(0.12, 3.35, 0.08), glowMaterial, new THREE.Vector3(0, 2.15, 0.19), undefined, group);
+      strip.userData.doorIndicator = true; strip.userData.liftingStrip = true;
       const pers = createPersModel(); pers.position.set(3.55, 0, 0.65); pers.rotation.y = -Math.PI / 2; pers.visible = false; group.add(pers);
       const redLight = new THREE.PointLight(0xff1238, 0, 12, 1.3); redLight.position.set(0, 2.3, 1.2); group.add(redLight);
       runtime.roomGroup.add(group); runtime.door = group; runtime.doorPers = pers; runtime.doorRedLight = redLight; runtime.doorCreaked = false;
@@ -1172,7 +1172,19 @@ export default function IonGame() {
       addMesh(new THREE.BoxGeometry(0.5, runtime.roomHeight, runtime.roomLength), wallMat, new THREE.Vector3(-runtime.roomWidth / 2, runtime.roomHeight / 2, 0));
       addMesh(new THREE.BoxGeometry(0.5, runtime.roomHeight, runtime.roomLength), wallMat.clone(), new THREE.Vector3(runtime.roomWidth / 2, runtime.roomHeight / 2, 0));
       addMesh(new THREE.BoxGeometry(runtime.roomWidth, runtime.roomHeight, 0.45), wallMat.clone(), new THREE.Vector3(0, runtime.roomHeight / 2, runtime.roomLength / 2));
-      addMesh(new THREE.BoxGeometry(runtime.roomWidth, runtime.roomHeight, 0.45), wallMat.clone(), new THREE.Vector3(0, runtime.roomHeight / 2, -runtime.roomLength / 2));
+      // Build around the opening: a solid end wall would hide the animated gate.
+      const openingWidth = 4.8;
+      const openingHeight = 4.3;
+      const sideWidth = (runtime.roomWidth - openingWidth) / 2;
+      [-1, 1].forEach((side) => {
+        addMesh(new THREE.BoxGeometry(sideWidth, runtime.roomHeight, 0.45), wallMat.clone(),
+          new THREE.Vector3(side * (openingWidth / 2 + sideWidth / 2), runtime.roomHeight / 2, -runtime.roomLength / 2));
+      });
+      addMesh(new THREE.BoxGeometry(openingWidth, runtime.roomHeight - openingHeight, 0.45), wallMat.clone(),
+        new THREE.Vector3(0, openingHeight + (runtime.roomHeight - openingHeight) / 2, -runtime.roomLength / 2));
+      // A short passage makes the empty doorway visible once the gate lifts.
+      addMesh(new THREE.PlaneGeometry(openingWidth, 4), floorMaterial.clone(),
+        new THREE.Vector3(0, 0, -runtime.roomLength / 2 - 2), new THREE.Euler(-Math.PI / 2, 0, 0));
       addBloodSplatters(rand, room);
       addTrapdoor();
       runtime.roomGroup.add(new THREE.HemisphereLight(runtime.chaseRoom ? 0xffffff : 0x6c8290, runtime.chaseRoom ? 0x637477 : 0x020405, runtime.chaseRoom ? 1.05 : 0.17));
@@ -1543,7 +1555,7 @@ export default function IonGame() {
       runtime.verticalVelocity -= 16.5 * dt; next.y += runtime.verticalVelocity * dt;
       if (next.y <= 1.65) { next.y = 1.65; runtime.verticalVelocity = 0; runtime.grounded = true; }
       next.x = THREE.MathUtils.clamp(next.x, -runtime.roomWidth / 2 + 0.72, runtime.roomWidth / 2 - 0.72);
-      const minZ = runtime.doorProgress > 0.82 ? -runtime.roomLength / 2 - 1.6 : -runtime.roomLength / 2 + 0.72;
+      const minZ = runtime.doorProgress > 0.82 && Math.abs(next.x) < 2.0 ? -runtime.roomLength / 2 - 1.6 : -runtime.roomLength / 2 + 0.72;
       next.z = THREE.MathUtils.clamp(next.z, minZ, runtime.roomLength / 2 - 0.72);
       const playerBox = new THREE.Box3().setFromCenterAndSize(next.clone().add(new THREE.Vector3(0, -0.45, 0)), new THREE.Vector3(radius * 2, 1.5, radius * 2));
       if (!runtime.obstacles.some((box) => box.intersectsBox(playerBox))) runtime.player.copy(next);
@@ -1566,7 +1578,7 @@ export default function IonGame() {
       runtime.flashlight.angle = runtime.lightInfusion === "quartz" ? 0.56 : 0.44; runtime.flashlight.penumbra = 0.64;
       runtime.luxuryLight.intensity = 0;
       renderer.toneMappingExposure = runtime.chaseRoom ? 1.22 : Math.max(0.52, 0.76 - runtime.tier * 0.028);
-      if (runtime.player.z < -runtime.roomLength / 2 - 0.82 && runtime.doorProgress > 0.82) { runtime.transition = 1; runtime.transitionDirection = 1; }
+      if (runtime.transition <= 0 && runtime.player.z < -runtime.roomLength / 2 - 0.82 && runtime.doorProgress > 0.82) { runtime.transition = 1; runtime.transitionDirection = 1; }
     }
     function updateEnemies(dt: number) {
       const movingFast = runtime.keysDown.has("ShiftLeft") || runtime.keysDown.has("ShiftRight") || runtime.touchMove.sprint;
@@ -1705,6 +1717,12 @@ export default function IonGame() {
           material.opacity = Math.max(0, 1 - Math.max(0, runtime.doorProgress - 0.34) / 0.66);
           material.depthWrite = material.opacity > 0.08;
           panel.visible = runtime.doorProgress < 0.985;
+        });
+        runtime.door?.children.forEach((child) => {
+          if (child.userData.liftingStrip) {
+            child.position.y = 2.15 + lift;
+            child.visible = runtime.doorProgress < 0.985;
+          }
         });
         if (runtime.doorPers) {
           runtime.doorPers.position.x = 3.55 - Math.sin(runtime.doorProgress * Math.PI) * 1.5;
