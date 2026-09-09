@@ -1695,10 +1695,17 @@ export default function IonGame() {
         light.intensity = failure ? 0.35 : 12 + Math.sin(performance.now() * 0.003 + index) * 3; });
       if (runtime.doorOpening) {
         if (!runtime.doorCreaked) { runtime.doorCreaked = true; runtime.audio?.creak(); if (runtime.doorPers) runtime.doorPers.visible = true; }
-        runtime.doorProgress = Math.min(1, runtime.doorProgress + dt * 0.24);
-        const lift = THREE.MathUtils.smoothstep(runtime.doorProgress, 0, 1) * 4.65;
-        runtime.doorPanels[0]?.position.set(-1.19, 2.12 + lift, 0);
-        runtime.doorPanels[1]?.position.set(1.19, 2.12 + lift, 0);
+        runtime.doorProgress = Math.min(1, runtime.doorProgress + dt * 0.2);
+        const easedLift = THREE.MathUtils.smootherstep(runtime.doorProgress, 0, 1);
+        const lift = easedLift * (runtime.roomHeight + 2.8);
+        runtime.doorPanels.forEach((panel, index) => {
+          panel.position.set(index === 0 ? -1.19 : 1.19, 2.12 + lift, 0);
+          const material = panel.material as THREE.MeshStandardMaterial;
+          material.transparent = true;
+          material.opacity = Math.max(0, 1 - Math.max(0, runtime.doorProgress - 0.34) / 0.66);
+          material.depthWrite = material.opacity > 0.08;
+          panel.visible = runtime.doorProgress < 0.985;
+        });
         if (runtime.doorPers) {
           runtime.doorPers.position.x = 3.55 - Math.sin(runtime.doorProgress * Math.PI) * 1.5;
           runtime.doorPers.rotation.y = -Math.PI / 2 + runtime.doorProgress * Math.PI * 0.55;
