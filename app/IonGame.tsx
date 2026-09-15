@@ -379,7 +379,7 @@ const TUTORIAL_STEPS = [
     number: "03",
     label: "THE GRIN & TRAPDOORS",
     title: "Red flashes mean you have ten seconds.",
-    body: "Before the Grin enters your room, the screen flashes red for ten seconds. Find the floor trapdoor in every room and press interact to hide. The sealed hatch grants contact immunity until you climb out. Trapdoors jam during Blob chases.",
+    body: "Each eligible room has a fresh 7% chance of a Grin encounter. The screen flashes red for ten seconds before it arrives, then the Grin leaves after fifteen seconds. Find the floor trapdoor in every room and press interact to hide. The sealed hatch grants contact immunity until you climb out. Trapdoors jam during Blob chases.",
     desktop: "RED FLASH · FIND HATCH · E TO HIDE OR EXIT",
     touch: "RED FLASH · FIND HATCH · USE TO HIDE OR EXIT",
   },
@@ -691,7 +691,7 @@ export default function IonGame() {
         crystals: { ...runtime.crystals }, discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion,
         lightInfusion: runtime.lightInfusion, keys: runtime.accessKeys,
         objective: runtime.objective, prompt: runtime.prompt, entityDistance,
-        grinRoom: runtime.grinRoom, grinTeleportIn: runtime.grinTeleportTimer,
+        grinRoom: runtime.grinRoom, grinTeleportIn: grin ? Math.max(0, 15 - grin.phase) : 0,
         grinWarning: runtime.grinIncoming, grinWarningIn: runtime.grinWarningTimer, hiding: runtime.hiding,
         chaseLevel: runtime.chaseLevel, blobDistance, haidIniActive: runtime.haidIniActive,
         inventory: { ...runtime.inventory }, basdinos: runtime.basdinos, wardCharges: runtime.wardCharges,
@@ -1010,7 +1010,7 @@ export default function IonGame() {
       object.position.set((rand() - 0.5) * (runtime.roomWidth - 4), 0, -runtime.roomLength * 0.18 + (rand() - 0.5) * 7);
       runtime.roomGroup.add(object);
       runtime.enemies.push({ object, kind, speed: kind === "entity" ? Math.min(10.5, 5.1 + runtime.room * 0.023) : kind === "blob" ? 4 : kind === "haidini" ? 0.78 + runtime.tier * 0.03 : kind === "crawler" ? 4.2 + runtime.tier * 0.24 : kind === "watcher" ? 3.3 + runtime.tier * 0.2 : 2 + runtime.tier * 0.28,
-        alive: true, teleportTimer: 10, revealOnly: kind === "wraith", phase: rand() * Math.PI * 2,
+        alive: true, teleportTimer: 10, revealOnly: kind === "wraith", phase: kind === "entity" ? 0 : rand() * Math.PI * 2,
         wanderTarget: new THREE.Vector3((rand() - 0.5) * (runtime.roomWidth - 4), 0, (rand() - 0.5) * (runtime.roomLength - 5)), wanderTimer: 1.5 + rand() * 2.5 });
     }
 
@@ -1154,10 +1154,10 @@ export default function IonGame() {
       runtime.doorUnlocked = room === 1 || room === 200 || (runtime.requiredResonators === 0 && runtime.mandatoryCollected);
       runtime.hiding = false;
       const grinRoll = !runtime.chaseRoom && !runtime.haidIniActive && !runtime.persHubActive && room < 200
-        && (runtime.banishedUntil.entity ?? 0) < room && rand() < 0.07;
+        && (runtime.banishedUntil.entity ?? 0) < room && Math.random() < 0.07;
       runtime.grinRoom = grinRoll ? room : -1; runtime.grinTargetRoom = runtime.grinRoom;
       runtime.grinIncoming = grinRoll; runtime.grinWarningTimer = grinRoll ? 10 : 0; runtime.grinTeleportTimer = 0;
-      runtime.spawnGrace = 2.2; runtime.roomSpawnTimer = 0.12; runtime.roomEntitySpawned = !grinRoll;
+      runtime.spawnGrace = 2.2; runtime.roomSpawnTimer = 0.12; runtime.roomEntitySpawned = true; // Warning completion arms the single spawn.
       runtime.verticalVelocity = 0; runtime.grounded = true; runtime.cameraMode = false; runtime.player.set(0, 1.65, runtime.roomLength / 2 - 3.4); runtime.yaw = 0; runtime.pitch = 0;
       const cave = /Caves|Caverns|Tunnels|Nursery|Gallery/.test(runtime.roomName);
       const corruption = runtime.tier / 7;
@@ -1584,7 +1584,14 @@ export default function IonGame() {
       const movingFast = runtime.keysDown.has("ShiftLeft") || runtime.keysDown.has("ShiftRight") || runtime.touchMove.sprint;
       const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); let mainDistance = 99;
       runtime.enemies.forEach((enemy) => {
-        if (!enemy.alive) return; enemy.phase += dt; const toPlayer = runtime.player.clone().sub(enemy.object.position); toPlayer.y = 0; const distance = toPlayer.length();
+        if (!enemy.alive) return; enemy.phase += dt;
+        if (enemy.kind === "entity" && enemy.phase >= 15) {
+          removeEnemy(enemy); runtime.grinRoom = -1; runtime.grinTargetRoom = -1;
+          runtime.grinIncoming = false; runtime.grinWarningTimer = 0; runtime.roomEntitySpawned = true;
+          notify("GRIN DEPARTED · YOU CAN LEAVE THE TRAPDOOR"); updateHud(true);
+          return;
+        }
+        const toPlayer = runtime.player.clone().sub(enemy.object.position); toPlayer.y = 0; const distance = toPlayer.length();
         if (enemy.kind === "entity" || enemy.kind === "blob" || enemy.kind === "haidini") mainDistance = Math.min(mainDistance, distance);
         if (enemy.kind === "wraith") { const material = enemy.object.userData.wraithMaterial as THREE.MeshStandardMaterial; material.opacity = runtime.cameraMode ? 0.72 : 0; }
         if (runtime.spawnGrace > 0) return;
@@ -1649,7 +1656,7 @@ export default function IonGame() {
         }
       }
       if (runtime.room !== 200 && !runtime.chaseRoom) {
-        if (!runtime.roomEntitySpawned) {
+        if (!runtime.roomEntitySpawned && !runtime.grinIncoming) {
           runtime.roomSpawnTimer -= dt;
           if (runtime.roomSpawnTimer <= 0) {
             addEnemy("entity", Math.random);
@@ -1791,7 +1798,7 @@ export default function IonGame() {
           <div className={`grin-meter ${grinBars >= 6 ? "critical" : grinBars >= 3 ? "warning" : ""}`}>
             <div><span>GRIN PROXIMITY</span><strong>{grinStatus}</strong></div>
             <div className="grin-bars" aria-label={`${grinBars} of 8 proximity bars`}>{Array.from({ length: 8 }, (_, index) => <i className={index < grinBars ? "active" : ""} key={index} />)}</div>
-            <small>{hud.grinWarning ? "FIND A TRAPDOOR NOW" : "7% SPAWN ROLL EACH ROOM"}</small>
+            <small>{hud.grinWarning ? "FIND A TRAPDOOR NOW" : hud.grinRoom === hud.room && hud.entityDistance < 90 ? `LEAVES IN ${Math.ceil(hud.grinTeleportIn)}S` : "7% SPAWN ROLL EACH ROOM"}</small>
           </div>
         </section>
         <button className="inventory-toggle" onClick={() => actionRef.current?.openInventory()}>INVENTORY <b>{inventoryCount}</b></button>
