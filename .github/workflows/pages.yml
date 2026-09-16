@@ -35,6 +35,9 @@ jobs:
       - name: Build static game
         run: npm run build:pages
 
+      - name: Check encounters and model geometry
+        run: node --test tests/encounters.test.cjs
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 

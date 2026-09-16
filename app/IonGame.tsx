@@ -3,6 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { ModelAssets, animateModel, disposeModel } from "./modelAssets";
+import { createMonster, animateMonster, MONSTER_NAMES, MONSTER_COLORS, type MonsterKind } from "./monsterModels";
+import { chaseForRoom, chaseRoomRules, exitRequirements, type ChaseState } from "./encounters";
+import { gradientMaterial, smoothNormals } from "./surfaceStyle";
+import { HorrorAudio } from "./horrorAudio";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
 type CrystalKey =
   | "malachite"
@@ -14,7 +19,7 @@ type CrystalKey =
   | "corrupted";
 
 type ItemKey = "soul" | "royalBattery" | "obsidianMagazine" | "citrineRush" | "persKey" | "crystalWard";
-type EnemyKind = "entity" | "sound" | "prism" | "mimic" | "wraith" | "blob" | "crawler" | "watcher" | "haidini";
+type EnemyKind = MonsterKind;
 
 type Screen =
   | "start"
@@ -40,6 +45,14 @@ type CrystalInfo = {
 };
 
 type HudState = {
+  noiseActive: boolean;
+  noiseCount: number;
+  noiseTime: number;
+  chaseStage: number;
+  resonatorsTuned: number;
+  resonatorsRequired: number;
+  infectionCaption: string;
+  deathKind: EnemyKind;
   room: number;
   roomName: string;
   tier: string;
@@ -72,7 +85,7 @@ type HudState = {
 
 type Pickup = {
   object: THREE.Group;
-  kind: "crystal" | "ammo" | "battery";
+  kind: "crystal" | "ammo" | "battery" | "specimen";
   crystal?: CrystalKey;
   mandatory?: boolean;
 };
@@ -84,6 +97,7 @@ type Station = {
 };
 
 type Enemy = {
+  stunTimer?: number;
   object: THREE.Group;
   kind: EnemyKind;
   speed: number;
@@ -103,6 +117,16 @@ type Hazard = {
 };
 
 type Runtime = {
+  chaseState: ChaseState | null;
+  noiseActive: boolean;
+  noiseCount: number;
+  noiseTime: number;
+  noisePulseTimer: number;
+  infectionTime: number;
+  infectionActors: THREE.Group | null;
+  deathKind: EnemyKind;
+  scareActor: THREE.Group | null;
+  scareTime: number;
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -193,6 +217,7 @@ type Runtime = {
 };
 
 type SaveData = {
+  chaseState?: ChaseState | null;
   room: number;
   ammo: number;
   battery: number;
@@ -403,13 +428,23 @@ const TUTORIAL_STEPS = [
   {
     number: "06",
     label: "BLOB CHASES",
-    title: "Every 25th room becomes a chase.",
-    body: "The overlit evacuation hall seals behind you as the Blob advances. Jump barriers and use whirlpools to escape. Every later chase is longer, tighter and faster.",
-    desktop: "SPACE JUMP · SHIFT SPRINT · KEEP MOVING",
-    touch: "JUMP · HOLD RUN · KEEP MOVING",
+    title: "Five rooms. No safe stops.",
+    body: "Rooms 25–29, 50–54 and every later 25-room interval become five-room Blob pursuits. In EACH room, collect Noise’s five cyan specimens and tune four resonators. Resonators briefly stagger the Blob. Jump barriers, sprint and use whirlpools. Later stages get harder.",
+    desktop: "SPACE JUMP · SHIFT RUN · E COLLECT / TUNE ×4",
+    touch: "JUMP · HOLD RUN · USE TO COLLECT / TUNE ×4",
   },
   {
-    number: "07",
+    number: "07", label: "NOISE", title: "The waves are a countdown.",
+    body: "When the screen begins to ripple, recover five glowing cyan specimen capsules before the Noise countdown reaches zero. Hiding cannot stop the pressure rupture. Every chase room contains Noise; the specimen counter resets on entering the next room.",
+    desktop: "E COLLECT ×5 · WATCH THE NOISE TIMER", touch: "USE TO COLLECT ×5 · WATCH THE NOISE TIMER",
+  },
+  {
+    number: "08", label: "REMETONS", title: "Pers can be infected.",
+    body: "Eligible normal rooms have a 2% Remetons chance. Watch Pers turn black and transform into a crowned Blob. When the scene ends, sprint through five pursuit rooms, completing four resonators and five Noise specimens in each. The game pauses the threat timers during the transformation.",
+    desktop: "WATCH THE TRANSFORMATION · PREPARE TO RUN", touch: "WATCH THE TRANSFORMATION · PREPARE TO RUN",
+  },
+  {
+    number: "09",
     label: "FLUORITE & PERS HUB",
     title: "The main currency cannot be found.",
     body: "At an Infusionsmith, combine one Malachite, Amethyst, Quartz and Corrupted crystal to synthesize Fluorite. After the first chase, Room 32 contains Pers Hub: trade Fluorite for random inventory items or spend ten on a Basdino companion.",
@@ -417,7 +452,7 @@ const TUTORIAL_STEPS = [
     touch: "SYNTHESIZE FLUORITE · VISIT PERS AT ROOM 32",
   },
   {
-    number: "08",
+    number: "10",
     label: "INVENTORY & BASDINOS",
     title: "Carry miracles. Never trust them.",
     body: "Open the new inventory to use Pers items. A Soul of Sadist lets you choose an entity to banish. Basdinos follow you and sacrifice themselves to absorb one otherwise-fatal contact.",
@@ -427,6 +462,8 @@ const TUTORIAL_STEPS = [
 ];
 
 const INITIAL_HUD: HudState = {
+  noiseActive: false, noiseCount: 0, noiseTime: 0, chaseStage: 0,
+  resonatorsTuned: 0, resonatorsRequired: 0, infectionCaption: "", deathKind: "entity",
   room: 1,
   roomName: "Intake Corridor",
   tier: "CONTAINMENT",
@@ -458,6 +495,7 @@ const INITIAL_HUD: HudState = {
 };
 
 class AudioEngine {
+  horror: HorrorAudio;
   context: AudioContext;
   master: GainNode;
   entityGain: GainNode;
@@ -469,7 +507,10 @@ class AudioEngine {
     this.context = new AudioContext();
     this.master = this.context.createGain();
     this.master.gain.value = 0.24;
-    this.master.connect(this.context.destination);
+    const limiter = this.context.createDynamicsCompressor();
+    limiter.threshold.value = -16; limiter.ratio.value = 10; limiter.attack.value = 0.003;
+    this.master.connect(limiter).connect(this.context.destination);
+    this.horror = new HorrorAudio(this.context, this.master);
     const hum = this.context.createOscillator();
     hum.type = "sine";
     hum.frequency.value = 43;
@@ -561,7 +602,8 @@ class AudioEngine {
     osc.start(now); osc.stop(now + 1.45);
   }
 
-  jumpscare() {
+  jumpscare(kind: EnemyKind = "entity") {
+    if (this.horror.play(kind)) return;
     const now = this.context.currentTime;
     const length = Math.floor(this.context.sampleRate * 0.9);
     const buffer = this.context.createBuffer(1, length, this.context.sampleRate);
@@ -661,6 +703,8 @@ export default function IonGame() {
     gunModel.rotation.set(-0.05, -0.05, 0);
     camera.add(gunModel);
     const runtime: Runtime = {
+      chaseState: null, noiseActive: false, noiseCount: 0, noiseTime: 0, noisePulseTimer: 0,
+      infectionTime: -1, infectionActors: null, deathKind: "entity", scareActor: null, scareTime: 0,
       renderer, scene, camera, roomGroup, roomWidth: 17, roomLength: 25, roomHeight: 6,
       room: 1, roomName: "Intake Corridor", tier: 0, player: new THREE.Vector3(0, 1.65, 8),
       verticalVelocity: 0, grounded: true,
@@ -691,9 +735,14 @@ export default function IonGame() {
       runtime.hudTimer = 0;
       const grin = runtime.enemies.find((enemy) => enemy.kind === "entity" && enemy.alive);
       const entityDistance = grin ? grin.object.position.distanceTo(runtime.player) : 99;
-      const blob = runtime.enemies.find((enemy) => enemy.kind === "blob" && enemy.alive);
+      const blob = runtime.enemies.find((enemy) => (enemy.kind === "blob" || enemy.kind === "remetons") && enemy.alive);
       const blobDistance = blob ? blob.object.position.distanceTo(runtime.player) : 99;
       setHud({ room: runtime.room, roomName: runtime.roomName, tier: TIERS[runtime.tier] ?? "ION",
+        noiseActive: runtime.noiseActive, noiseCount: runtime.noiseCount, noiseTime: runtime.noiseTime,
+        chaseStage: runtime.chaseState ? runtime.room - runtime.chaseState.start + 1 : 0,
+        resonatorsTuned: runtime.activeResonators, resonatorsRequired: runtime.requiredResonators,
+        infectionCaption: runtime.infectionTime < 0 ? "" : runtime.infectionTime < 2 ? "REMETONS · PERS IS NOT ALONE" : runtime.infectionTime < 4.5 ? "THE INFECTION IS SPREADING" : "PERS IS BECOMING THE BLOB · GET READY TO RUN",
+        deathKind: runtime.deathKind,
         ammo: runtime.ammo, maxAmmo: runtime.maxAmmo, battery: runtime.battery, flashlightOn: runtime.flashlightOn,
         crystals: { ...runtime.crystals }, discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion,
         lightInfusion: runtime.lightInfusion, keys: runtime.accessKeys,
@@ -713,6 +762,12 @@ export default function IonGame() {
 
     function addMesh(geometry: THREE.BufferGeometry, material: THREE.Material, position: THREE.Vector3,
       rotation?: THREE.Euler, parent: THREE.Object3D = runtime.roomGroup) {
+      if (geometry instanceof THREE.BoxGeometry) {
+        const {width,height,depth} = geometry.parameters;
+        if (Math.min(width,height,depth) > 0.15 && Math.max(width,height,depth) < 20) {
+          geometry.dispose(); geometry = new RoundedBoxGeometry(width,height,depth,2,Math.min(width,height,depth)*0.1);
+        }
+      }
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.copy(position);
       if (rotation) mesh.rotation.copy(rotation);
@@ -791,7 +846,7 @@ export default function IonGame() {
       } else if (key === "fluorite") {
         for (let i = 0; i < 5; i += 1) {
           const edge = size * (0.28 + rand() * 0.32);
-          const cube = new THREE.Mesh(new THREE.BoxGeometry(edge, edge, edge), material);
+          const cube = new THREE.Mesh(new RoundedBoxGeometry(edge, edge, edge, 3, edge*.1), material);
           cube.position.set((rand() - 0.5) * size, rand() * 0.6 * size, (rand() - 0.5) * size);
           cube.rotation.set(rand(), rand(), rand()); cube.castShadow = true; group.add(cube);
         }
@@ -860,7 +915,7 @@ export default function IonGame() {
 
     function createPersModel() {
       const group = new THREE.Group();
-      const coat = new THREE.MeshPhysicalMaterial({ color: 0x5b0714, emissive: 0x350006, emissiveIntensity: 0.75, roughness: 0.28, clearcoat: 0.7 });
+      const coat = gradientMaterial(0x180719, 0xb02b4c, 0.2);
       const gold = new THREE.MeshStandardMaterial({ color: 0xd9a843, emissive: 0x5b2400, emissiveIntensity: 0.8, metalness: 0.82, roughness: 0.2 });
       const shadow = new THREE.MeshStandardMaterial({ color: 0x090306, roughness: 0.5 });
       const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 1.25, 6, 12), coat); body.position.y = 1.35; group.add(body);
@@ -869,7 +924,7 @@ export default function IonGame() {
       const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.32, 0.34, 7), gold); crown.position.y = 2.86; group.add(crown);
       const collar = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.08, 8, 18), gold); collar.position.y = 2.12; collar.rotation.x = Math.PI / 2; group.add(collar);
       [-1, 1].forEach((side) => { const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.88, 4, 7), coat); arm.position.set(side * 0.48, 1.55, 0); arm.rotation.z = side * 0.25; arm.userData.persArm = side; group.add(arm); });
-      group.traverse((child) => { if (child instanceof THREE.Mesh) child.castShadow = true; });
+      group.traverse((child) => { if (child instanceof THREE.Mesh) { child.castShadow = true; smoothNormals(child.geometry); } });
       return group;
     }
 
@@ -912,125 +967,7 @@ export default function IonGame() {
       }
     }
 
-    function createEntityModel(kind: Enemy["kind"]) {
-      const group = new THREE.Group();
-      const imported = kind === "watcher"
-        ? assets.create("watcher", { height: 2.5, animation: "Flying_Idle", tint: 0x706786, emissive: 0.18 })
-        : kind === "crawler" || kind === "sound"
-          ? assets.create("alien", { size: kind === "crawler" ? [1.1, 0.72, 1.35] : [1, 2.3, 0.85], animation: "Run", tint: kind === "crawler" ? 0x663540 : 0x364f57, emissive: 0.07 })
-          : null;
-      if (imported) return imported;
-      if (kind === "entity") {
-        const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.48, 1.7, 5, 10), blackMaterial);
-        torso.position.y = 1.45; torso.scale.set(0.62, 1, 0.52); group.add(torso);
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.69, 22, 16), blackMaterial);
-        head.position.y = 2.78; head.scale.set(1.06, 0.92, 0.72); group.add(head);
-        const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
-        [-0.29, 0.29].forEach((x) => {
-          const eye = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 10), eyeMaterial);
-          eye.position.set(x, 2.93, -0.57); eye.scale.set(1, 1.35, 0.35); group.add(eye);
-        });
-        const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.52, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.56), eyeMaterial);
-        mouth.position.set(0, 2.58, -0.58); mouth.rotation.x = Math.PI; mouth.scale.set(1.05, 0.45, 0.25); group.add(mouth);
-        const toothMaterial = new THREE.MeshStandardMaterial({ color: 0xd8d4c8, roughness: 0.75 });
-        for (let i = 0; i < 18; i += 1) {
-          const x = -0.44 + (i % 9) * 0.11; const top = i < 9;
-          const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.038, 0.18 + (i % 3) * 0.025, 5), toothMaterial);
-          tooth.position.set(x, top ? 2.68 : 2.49, -0.765); tooth.rotation.z = top ? Math.PI : 0; group.add(tooth);
-        }
-        [-1, 1].forEach((side) => {
-          const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 1.65, 4, 7), blackMaterial);
-          arm.position.set(side * 0.54, 1.25, 0); arm.rotation.z = side * 0.13; arm.userData.limb = side; group.add(arm);
-        });
-      } else if (kind === "blob") {
-        const flesh = new THREE.MeshPhysicalMaterial({ color: 0xb94c59, emissive: 0x3a070d, emissiveIntensity: 0.48,
-          roughness: 0.22, metalness: 0.04, clearcoat: 0.82, clearcoatRoughness: 0.18 });
-        const wetFlesh = new THREE.MeshPhysicalMaterial({ color: 0xe5858d, emissive: 0x46080d, emissiveIntensity: 0.32,
-          roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.08 });
-        const body = new THREE.Mesh(new THREE.SphereGeometry(1.78, 28, 22), flesh); body.position.y = 1.78; body.scale.set(1.28, 1.18, 0.82); group.add(body);
-        const eyeWhite = new THREE.MeshPhysicalMaterial({ color: 0xd7a5b0, roughness: 0.08, clearcoat: 1 });
-        const irisMaterial = new THREE.MeshPhysicalMaterial({ color: 0x512a48, emissive: 0x260d22, emissiveIntensity: 0.65, roughness: 0.12, clearcoat: 1 });
-        const pupilMaterial = new THREE.MeshBasicMaterial({ color: 0x080108 });
-        [-0.72, 0.72].forEach((x) => {
-          const eye = new THREE.Mesh(new THREE.SphereGeometry(0.57, 20, 16), eyeWhite); eye.position.set(x, 2.28, -1.3); eye.scale.z = 0.44; group.add(eye);
-          const iris = new THREE.Mesh(new THREE.SphereGeometry(0.3, 18, 14), irisMaterial); iris.position.set(x, 2.28, -1.57); iris.scale.z = 0.22; group.add(iris);
-          const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.13, 14, 10), pupilMaterial); pupil.position.set(x, 2.28, -1.66); pupil.scale.z = 0.16; group.add(pupil);
-        });
-        const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.92, 24, 18, 0, Math.PI * 2, 0, Math.PI * 0.62), new THREE.MeshBasicMaterial({ color: 0x130006 }));
-        mouth.position.set(0, 1.1, -1.4); mouth.rotation.x = Math.PI; mouth.scale.set(0.92, 1.05, 0.3); group.add(mouth);
-        const toothMaterial = new THREE.MeshStandardMaterial({ color: 0xffeee0, roughness: 0.42 });
-        for (let i = 0; i < 16; i += 1) {
-          const x = -0.7 + (i % 8) * 0.2; const top = i < 8;
-          const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.34 + (i % 3) * 0.07, 6), toothMaterial);
-          tooth.position.set(x, top ? 1.48 : 0.72, -1.77); tooth.rotation.z = top ? Math.PI : 0; group.add(tooth);
-        }
-        const tongue = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 1.15, 5, 10), wetFlesh); tongue.position.set(0, 0.72, -1.84); tongue.rotation.x = -0.18; group.add(tongue);
-        for (let i = 0; i < 10; i += 1) {
-          const angle = (i / 10) * Math.PI * 2;
-          const tendril = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 1.2 + (i % 4) * 0.28, 4, 7), wetFlesh);
-          tendril.position.set(Math.cos(angle) * 1.52, 1.2 + Math.sin(i * 2.1) * 0.35, Math.sin(angle) * 0.72);
-          tendril.rotation.z = Math.cos(angle) * 1.08; tendril.rotation.x = Math.sin(angle) * 0.6; tendril.userData.tendril = i; group.add(tendril);
-        }
-      } else if (kind === "haidini") {
-        const orange = new THREE.MeshPhysicalMaterial({ color: 0xff6a00, emissive: 0x5a1600, emissiveIntensity: 0.42, roughness: 0.38, clearcoat: 0.45 });
-        const stripe = new THREE.MeshStandardMaterial({ color: 0x120807, roughness: 0.55, metalness: 0.08 });
-        const bone = new THREE.MeshStandardMaterial({ color: 0xffd7a3, emissive: 0x4c1b02, emissiveIntensity: 0.28, roughness: 0.5 });
-        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.72, 1.8, 7, 14), orange); body.position.y = 1.18; body.rotation.z = Math.PI / 2; body.scale.set(0.9, 1.25, 0.72); group.add(body);
-        for (let i = 0; i < 7; i += 1) {
-          const band = new THREE.Mesh(new THREE.TorusGeometry(0.64 - Math.abs(i - 3) * 0.025, 0.075, 7, 22), stripe);
-          band.position.set(-0.92 + i * 0.31, 1.18, 0); band.rotation.y = Math.PI / 2; band.scale.z = 0.72; group.add(band);
-        }
-        const neck = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.92, 5, 10), orange); neck.position.set(0, 1.82, -0.72); neck.rotation.x = -0.52; group.add(neck);
-        const head = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 0.78, 6, 12), orange); head.position.set(0, 2.35, -1.12); head.rotation.x = Math.PI / 2; head.scale.set(0.9, 1.15, 0.82); group.add(head);
-        const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.42, 0.72), stripe); muzzle.position.set(0, 2.14, -1.63); muzzle.rotation.x = -0.08; group.add(muzzle);
-        [-0.22, 0.22].forEach((x) => {
-          const eye = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 9), bone); eye.position.set(x, 2.5, -1.47); group.add(eye);
-          const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.045, 9, 7), new THREE.MeshBasicMaterial({ color: 0x170000 })); pupil.position.set(x, 2.5, -1.57); group.add(pupil);
-          const ear = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.48, 6), stripe); ear.position.set(x * 1.35, 2.82, -1.05); ear.rotation.z = x < 0 ? 0.24 : -0.24; group.add(ear);
-        });
-        for (let i = 0; i < 9; i += 1) {
-          const mane = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.42, 5), stripe); mane.position.set(0, 2.66 - i * 0.17, -0.72 + i * 0.12); mane.rotation.x = -0.82; group.add(mane);
-        }
-        [-0.48, 0.48].forEach((x, sideIndex) => [-0.55, 0.55].forEach((z, legIndex) => {
-          const limbIndex = sideIndex * 2 + legIndex;
-          const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.105, 1.02, 5, 8), orange); leg.position.set(x, 0.54, z); leg.userData.limb = limbIndex; group.add(leg);
-          const legBand = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.045, 6, 14), stripe); legBand.position.set(x, 0.55, z); legBand.rotation.x = Math.PI / 2; group.add(legBand);
-          const hoof = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.18, 0.38), stripe); hoof.position.set(x, 0.09, z - 0.05); group.add(hoof);
-        }));
-        const warningLight = new THREE.PointLight(0xff5a00, 9, 6, 2); warningLight.position.set(0, 1.8, -0.8); group.add(warningLight);
-      } else if (kind === "crawler") {
-        const carapace = new THREE.MeshPhysicalMaterial({ color: 0x13080b, emissive: 0x26030a, emissiveIntensity: 0.42, roughness: 0.32, clearcoat: 0.7 });
-        const body = new THREE.Mesh(new THREE.SphereGeometry(0.48, 14, 10), carapace); body.position.y = 0.38; body.scale.set(1.5, 0.55, 1); group.add(body);
-        for (let i = 0; i < 8; i += 1) {
-          const side = i < 4 ? -1 : 1; const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.045, 0.85, 5), blackMaterial);
-          leg.position.set(side * 0.52, 0.2, ((i % 4) - 1.5) * 0.2); leg.rotation.z = side * 1.08; leg.userData.limb = i; group.add(leg);
-        }
-        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff1947 })); eye.position.set(0, 0.43, -0.5); group.add(eye);
-      } else if (kind === "watcher") {
-        const shell = new THREE.MeshPhysicalMaterial({ color: 0x172126, emissive: 0x173a44, emissiveIntensity: 0.7, roughness: 0.2, metalness: 0.52 });
-        const body = new THREE.Mesh(new THREE.OctahedronGeometry(0.72, 2), shell); body.position.y = 1.5; body.scale.set(0.75, 1.7, 0.55); group.add(body);
-        const iris = new THREE.Mesh(new THREE.SphereGeometry(0.3, 18, 12), new THREE.MeshBasicMaterial({ color: 0xf2fcff })); iris.position.set(0, 1.58, -0.47); iris.scale.z = 0.25; group.add(iris);
-        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8), new THREE.MeshBasicMaterial({ color: 0x05070a })); pupil.position.set(0, 1.58, -0.69); pupil.scale.z = 0.2; group.add(pupil);
-        const halo = new THREE.Mesh(new THREE.TorusGeometry(0.86, 0.035, 7, 28), shell); halo.position.y = 1.5; halo.rotation.x = Math.PI / 2; group.add(halo);
-      } else if (kind === "sound") {
-        const body = createCrystal("obsidian", 1.4); body.rotation.z = Math.PI / 2; body.position.y = 0.6; group.add(body);
-        for (let i = 0; i < 6; i += 1) {
-          const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.055, 0.85, 5), blackMaterial);
-          leg.position.set((i < 3 ? -1 : 1) * 0.42, 0.25, ((i % 3) - 1) * 0.22); leg.rotation.z = (i < 3 ? -1 : 1) * 0.72; group.add(leg);
-        }
-      } else if (kind === "prism" || kind === "mimic") {
-        const crystal = createCrystal(kind === "prism" ? "amethyst" : "quartz", 1.1);
-        crystal.position.y = kind === "prism" ? 1.15 : 0; group.add(crystal);
-        if (kind === "prism") { const glow = new THREE.PointLight(0x9c63ff, 11, 4.5); glow.position.y = 1.2; group.add(glow); }
-      } else {
-        const wraithMaterial = new THREE.MeshStandardMaterial({ color: 0xdcefff, emissive: 0x8ad7ff, emissiveIntensity: 2,
-          transparent: true, opacity: 0, wireframe: true });
-        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 1.65, 4, 10), wraithMaterial); body.position.y = 1.4; group.add(body);
-        group.userData.wraithMaterial = wraithMaterial;
-      }
-      group.traverse((child) => { if (child instanceof THREE.Mesh) child.castShadow = true; });
-      return group;
-    }
+    function createEntityModel(kind: EnemyKind) { return createMonster(kind); }
 
     function addEnemy(kind: Enemy["kind"], rand: () => number) {
       const object = createEntityModel(kind);
@@ -1042,10 +979,11 @@ export default function IonGame() {
     }
 
     function addBlobChase() {
-      const object = createEntityModel("blob");
-      object.position.set(0, 0, runtime.roomLength / 2 + 2.2); object.scale.setScalar(0.92 + runtime.chaseLevel * 0.035);
+      const kind = runtime.chaseState?.type === "remetons" ? "remetons" : "blob";
+      const object = createEntityModel(kind);
+      object.position.set(0, 0, runtime.roomLength / 2 + 10); object.scale.setScalar(0.92 + runtime.chaseLevel * 0.035);
       runtime.roomGroup.add(object);
-      runtime.enemies.push({ object, kind: "blob", speed: 3.55 + runtime.chaseLevel * 0.19, alive: true, teleportTimer: 99, phase: 0,
+      runtime.enemies.push({ object, kind, speed: chaseRoomRules(runtime.room,runtime.chaseState!).speed, alive: true, teleportTimer: 99, phase: 0,
         wanderTarget: new THREE.Vector3(), wanderTimer: 99 });
     }
 
@@ -1062,6 +1000,8 @@ export default function IonGame() {
     }
 
     function clearRoom() {
+      if (runtime.scareActor) { camera.remove(runtime.scareActor); disposeModel(runtime.scareActor); runtime.scareActor = null; }
+      runtime.roomGroup.visible = true; runtime.infectionTime = -1; runtime.infectionActors = null;
       disposeModel(runtime.roomGroup);
       runtime.roomGroup.clear();
       runtime.pickups = []; runtime.stations = []; runtime.enemies = []; runtime.hazards = []; runtime.obstacles = [];
@@ -1102,7 +1042,11 @@ export default function IonGame() {
 
     function makePickup(kind: Pickup["kind"], position: THREE.Vector3, crystal?: CrystalKey, mandatory = false) {
       let object: THREE.Group;
-      if (kind === "crystal" && crystal) object = createCrystal(crystal, 1, true);
+      if (kind === "specimen") {
+        object = new THREE.Group();
+        const shell = new THREE.Mesh(new THREE.CapsuleGeometry(0.18,0.36,8,20),gradientMaterial(0x023783,0x74faff,0.9));object.add(shell);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(.28,.022,8,28),new THREE.MeshBasicMaterial({color:0x7bffff}));object.add(ring);
+      } else if (kind === "crystal" && crystal) object = createCrystal(crystal, 1, true);
       else {
         object = new THREE.Group(); const color = kind === "ammo" ? 0xff6b38 : 0x67e8ff;
         const material = new THREE.MeshStandardMaterial({ color: 0x151a1c, metalness: 0.8, roughness: 0.25 });
@@ -1131,10 +1075,11 @@ export default function IonGame() {
     function buildChaseCourse(rand: () => number) {
       const barrierMaterial = new THREE.MeshStandardMaterial({ color: 0xd9e5e4, emissive: 0x657675, emissiveIntensity: 0.32, metalness: 0.72, roughness: 0.27 });
       const warningMaterial = new THREE.MeshStandardMaterial({ color: 0xffb21f, emissive: 0xff5a00, emissiveIntensity: 1.15, roughness: 0.35 });
-      const count = 4 + runtime.chaseLevel * 2;
+      const count = chaseRoomRules(runtime.room,runtime.chaseState!).barriers;
       for (let i = 0; i < count; i += 1) {
         const progress = (i + 1) / (count + 1);
         const z = runtime.roomLength / 2 - 10 - progress * (runtime.roomLength - 22);
+        if ([...runtime.stations.filter(s=>s.kind==="resonator").map(s=>s.object.position.z), ...runtime.pickups.filter(p=>p.kind==="specimen" || p.mandatory).map(p=>p.object.position.z)].some(taskZ=>Math.abs(taskZ-z)<2.6)) continue;
         const height = Math.min(1.16, 0.68 + (i % 3) * 0.13 + runtime.chaseLevel * 0.025);
         const split = runtime.chaseLevel >= 3 && i % 3 === 1;
         if (split) {
@@ -1151,11 +1096,89 @@ export default function IonGame() {
           const marker = addMesh(new THREE.BoxGeometry(0.42, 0.07, 0.76), warningMaterial, new THREE.Vector3(stripe * 1.35, height + 0.045, z));
           marker.rotation.y = 0.32;
         }
-        if ((i === 1 || i === Math.floor(count * 0.62)) && runtime.chaseLevel >= 2) {
+        if (i === 1 || i === Math.floor(count * 0.62)) {
           const whirlpool = createWhirlpool(); whirlpool.position.set((rand() - 0.5) * 2.4, 0, z + 4.2);
           runtime.roomGroup.add(whirlpool); runtime.hazards.push({ object: whirlpool, radius: 3.8, phase: rand() * Math.PI * 2, cooldown: 0 });
         }
       }
+    }
+
+    function addCaveSunlight() {
+      const sun = new THREE.DirectionalLight(0xc8e8ff,1.65);
+      sun.position.set(-runtime.roomWidth*.28,runtime.roomHeight-.25,runtime.roomLength*.2);
+      sun.target.position.set(runtime.roomWidth*.18,0,-runtime.roomLength*.12);
+      sun.castShadow=true; sun.shadow.mapSize.set(1024,1024); sun.shadow.bias=-.001;
+      sun.shadow.camera.left=-16;sun.shadow.camera.right=16;sun.shadow.camera.top=30;sun.shadow.camera.bottom=-30;
+      sun.shadow.camera.far=100;runtime.roomGroup.add(sun,sun.target);
+      for(let i=0;i<3;i++) {
+        const shaft=new THREE.Mesh(new THREE.ConeGeometry(1.8,runtime.roomHeight,32,1,true),new THREE.MeshBasicMaterial({color:i%2?0x3aa9ff:0x9fe8ff,transparent:true,opacity:.035,depthWrite:false,side:THREE.DoubleSide}));
+        shaft.position.set(-2+i*2.2,runtime.roomHeight*.5,runtime.roomLength*.2-i*5);shaft.rotation.z=-.28;runtime.roomGroup.add(shaft);
+        const aperture=new THREE.Mesh(new THREE.TorusGeometry(.6,.08,12,48),new THREE.MeshBasicMaterial({color:0x97e3ff}));
+        aperture.rotation.x=Math.PI/2;aperture.position.set(shaft.position.x-1,runtime.roomHeight-.03,shaft.position.z);runtime.roomGroup.add(aperture);
+      }
+    }
+
+    function addNoiseEncounter() {
+      if (!runtime.noiseActive) return;
+      for(let i=0;i<5;i++) {
+        const z=runtime.roomLength/2-6-(i+.5)*(runtime.roomLength-14)/5;
+        makePickup("specimen",new THREE.Vector3((i%2?1:-1)*.7,.85,z));
+      }
+      const object=createEntityModel("noise");object.position.set(0,.1,-runtime.roomLength/2+4);runtime.roomGroup.add(object);
+      runtime.enemies.push({object,kind:"noise",speed:0,alive:true,teleportTimer:99,phase:0,wanderTarget:new THREE.Vector3(),wanderTimer:99});
+    }
+
+    function beginInfection() {
+      runtime.infectionTime=0;runtime.grinIncoming=false;runtime.grinWarningTimer=0;
+      const actors=new THREE.Group();actors.position.set(0,0,runtime.player.z-5.5);
+      const pers=createPersModel();pers.name="infected-pers";actors.add(pers);
+      const blob=createEntityModel("remetons");blob.name="infection-blob";blob.scale.setScalar(.015);blob.visible=false;actors.add(blob);
+      const light=new THREE.PointLight(0x397bff,35,15);light.position.set(0,3,2);actors.add(light);
+      runtime.roomGroup.add(actors);runtime.infectionActors=actors;runtime.gunModel.visible=false;
+      runtime.audio?.pulse("teleport");updateHud(true);
+    }
+
+    function updateInfection(dt:number) {
+      runtime.infectionTime+=dt;const t=runtime.infectionTime;const actors=runtime.infectionActors;
+      camera.position.copy(runtime.player);camera.lookAt(0,2,runtime.player.z-5.5);runtime.gunModel.visible=false;
+      if(actors){
+        const pers=actors.getObjectByName("infected-pers")!;const blob=actors.getObjectByName("infection-blob")!;
+        const blacken=THREE.MathUtils.smoothstep(t,1,4);
+        pers.traverse(node=>{if(node instanceof THREE.Mesh){const m=node.material as THREE.MeshStandardMaterial;if(m.color)m.color.setScalar(1-blacken*.99);if(m.emissive)m.emissive.multiplyScalar(.94);}});
+        pers.rotation.z=Math.sin(t*9)*.02*(1+blacken);pers.scale.set(1+blacken*.3,1-blacken*.22,1+blacken*.25);
+        const morph=THREE.MathUtils.smoothstep(t,4,8);blob.visible=morph>0;blob.scale.setScalar(.08+morph*.92);
+        pers.visible=morph<.92;pers.scale.multiplyScalar(1-morph*.85);animateMonster(blob,t);
+        actors.children.forEach(n=>{if(n instanceof THREE.PointLight)n.color.setHex(t<3?0x327bff:0xf51b50);});
+      }
+      if(t>=8.5){
+        if(actors){runtime.roomGroup.remove(actors);disposeModel(actors);}runtime.infectionActors=null;runtime.infectionTime=-1;
+        runtime.yaw=0;runtime.pitch=0;runtime.spawnGrace=3;runtime.gunModel.visible=true;
+        if((runtime.banishedUntil.remetons??0)<runtime.room)addBlobChase();
+        notify("REMETONS · INFECTED PERS IS HUNTING · FIVE ROOMS TO ESCAPE");
+      }
+      updateHud(true);
+    }
+
+    function beginJumpscare(kind:EnemyKind) {
+      runtime.deathKind=kind;runtime.scareTime=0;runtime.roomGroup.visible=false;runtime.gunModel.visible=false;
+      const actor=createEntityModel(kind);actor.userData.scareScale=kind==="blob"||kind==="remetons"?.68:1;
+      actor.scale.setScalar(actor.userData.scareScale);actor.position.set(0,-actor.userData.focusY*actor.userData.scareScale,-5);
+      const lamp=new THREE.PointLight(MONSTER_COLORS[kind],12,12);lamp.position.set(1,actor.userData.focusY,3);actor.add(lamp);
+      camera.add(actor);runtime.scareActor=actor;
+    }
+
+    function updateJumpscare(dt:number) {
+      const actor=runtime.scareActor;if(!actor)return;
+      runtime.scareTime+=dt;const t=runtime.scareTime;
+      const rush=THREE.MathUtils.smoothstep(t,.08,.52);
+      actor.position.z=-5+rush*3.4;
+      actor.position.x=runtime.deathKind==="crawler"?Math.sin(t*14)*.4:runtime.deathKind==="prism"?Math.sin(t*18)*.17:0;
+      actor.position.y=-actor.userData.focusY*actor.userData.scareScale+(runtime.deathKind==="crawler"?(1-rush)*-1.8:0);
+      actor.rotation.z=runtime.deathKind==="noise"?Math.sin(t*17)*.13:runtime.deathKind==="watcher"?Math.sin(t*4)*.18:Math.sin(t*24)*.04;
+      if(runtime.deathKind==="haidini")actor.rotation.y=Math.sin(t*13)*.2;
+      if(runtime.deathKind==="sound")actor.scale.y=actor.userData.scareScale*(1+Math.sin(t*18)*.09);
+      if(runtime.deathKind==="mimic")actor.rotation.y=t*2;
+      actor.visible=t<2.4;animateMonster(actor,t*3);
     }
 
     function buildRoom(room: number) {
@@ -1163,17 +1186,22 @@ export default function IonGame() {
       clearRoom(); const rand = seeded(room * 1931 + 71); runtime.room = room;
       if (room > previousRoom && runtime.speedBoostRooms > 0) runtime.speedBoostRooms -= 1;
       runtime.tier = Math.min(7, Math.floor((room - 1) / 25)); runtime.roomName = roomIdentity(room);
-      runtime.chaseRoom = room % 25 === 0 && room < 200; runtime.chaseLevel = runtime.chaseRoom ? room / 25 : 0;
+      runtime.chaseState = chaseForRoom(room,runtime.chaseState,Math.random(),(runtime.banishedUntil.remetons ?? 0)>=room);
+      runtime.chaseRoom = !!runtime.chaseState; runtime.chaseLevel = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).level : 0;
+      if (runtime.chaseState) runtime.roomName = `${runtime.chaseState.type === "remetons" ? "Infected Pers" : "Blob"} Pursuit · ${room-runtime.chaseState.start+1}/5`;
       runtime.persHubActive = room === 32;
       runtime.haidIniActive = !runtime.chaseRoom && !runtime.persHubActive && room >= 30 && room < 200 && (room % 30 === 0 || rand() < 0.055 + runtime.tier * 0.006);
       if ((runtime.banishedUntil.haidini ?? 0) >= room) runtime.haidIniActive = false;
       if (runtime.haidIniActive) runtime.roomName = "Haid-Ini Resonance Lockdown";
       runtime.roomWidth = runtime.chaseRoom ? Math.max(10.8, 15.5 - runtime.chaseLevel * 0.42) : Math.max(11.6, 18 - runtime.tier * 0.72 + rand() * 2.2);
-      runtime.roomLength = runtime.chaseRoom ? 64 + runtime.chaseLevel * 8 : 23 + rand() * 6 + runtime.tier * 0.35;
+      runtime.roomLength = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).length : 23 + rand() * 6 + runtime.tier * 0.35;
       runtime.roomHeight = runtime.chaseRoom ? 8.2 : Math.max(4.7, 7 - runtime.tier * 0.24 + rand());
       runtime.doorOpening = false; runtime.doorProgress = 0; runtime.mandatoryCrystal = MILESTONES[room] ?? null;
       runtime.mandatoryCollected = !runtime.mandatoryCrystal || runtime.discovered.has(runtime.mandatoryCrystal);
-      runtime.requiredResonators = runtime.haidIniActive ? 30 : !runtime.persHubActive && room > 2 && room % 4 === 0 && room % 25 !== 0 ? Math.min(4, 2 + Math.floor(runtime.tier / 2)) : 0;
+      runtime.requiredResonators = runtime.chaseRoom ? 4 : runtime.haidIniActive ? 30 : !runtime.persHubActive && room > 2 && room % 4 === 0 ? Math.min(4, 2 + Math.floor(runtime.tier / 2)) : 0;
+      runtime.noiseActive = !runtime.persHubActive && !runtime.haidIniActive && room < 200 && (runtime.banishedUntil.noise ?? 0) < room && (runtime.chaseRoom || room > 10 && rand() < 0.12);
+      runtime.noiseCount = 0; runtime.noiseTime = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).noiseSeconds : 42;
+      runtime.noisePulseTimer = 1;
       runtime.activeResonators = 0;
       runtime.doorUnlocked = room === 1 || room === 200 || (runtime.requiredResonators === 0 && runtime.mandatoryCollected);
       runtime.hiding = false;
@@ -1186,8 +1214,8 @@ export default function IonGame() {
       const cave = /Caves|Caverns|Tunnels|Nursery|Gallery/.test(runtime.roomName);
       const corruption = runtime.tier / 7;
       const fogColor = new THREE.Color().setRGB(0.008 + corruption * 0.035, 0.025 - corruption * 0.012, 0.03 + corruption * 0.025);
-      scene.background = runtime.chaseRoom ? new THREE.Color(0xb7c8c8) : fogColor.clone().multiplyScalar(0.34);
-      scene.fog = new THREE.FogExp2(runtime.chaseRoom ? 0xd9eded : fogColor, runtime.chaseRoom ? 0.008 : 0.039 + runtime.tier * 0.0068);
+      scene.background = new THREE.Color(0x020b20);
+      scene.fog = new THREE.FogExp2(0x081d37, runtime.chaseRoom ? 0.012 : 0.026 + runtime.tier * 0.002);
       renderer.toneMappingExposure = runtime.chaseRoom ? 1.22 : Math.max(0.52, 0.76 - runtime.tier * 0.028);
       const floorMaterial = cave ? caveMaterial.clone() : baseMaterial.clone(); floorMaterial.color.offsetHSL(0, 0, -runtime.tier * 0.008);
       addMesh(new THREE.PlaneGeometry(runtime.roomWidth, runtime.roomLength), floorMaterial, new THREE.Vector3(), new THREE.Euler(-Math.PI / 2, 0, 0));
@@ -1211,7 +1239,8 @@ export default function IonGame() {
         new THREE.Vector3(0, 0, -runtime.roomLength / 2 - 2), new THREE.Euler(-Math.PI / 2, 0, 0));
       addBloodSplatters(rand, room);
       addTrapdoor();
-      runtime.roomGroup.add(new THREE.HemisphereLight(runtime.chaseRoom ? 0xffffff : 0x6c8290, runtime.chaseRoom ? 0x637477 : 0x020405, runtime.chaseRoom ? 1.05 : 0.17));
+      runtime.roomGroup.add(new THREE.HemisphereLight(0x7ebdff,0x020817,runtime.chaseRoom?0.75:0.48));
+      addCaveSunlight();
       const lampCount = runtime.chaseRoom ? 14 + runtime.chaseLevel * 2 : Math.max(1, 4 - Math.floor(runtime.tier / 2));
       for (let i = 0; i < lampCount; i += 1) {
         const z = runtime.roomLength / 2 - 4 - i * (runtime.roomLength - 8) / Math.max(1, lampCount - 1);
@@ -1298,8 +1327,8 @@ export default function IonGame() {
       if (rand() < 0.26) makePickup("battery", new THREE.Vector3((rand() - 0.5) * 7, 0.26, (rand() - 0.5) * 9));
       if (runtime.requiredResonators > 0) {
         for (let i = 0; i < runtime.requiredResonators; i += 1) {
-          const x = (i % 2 ? 1 : -1) * (runtime.roomWidth / 2 - 1.25);
-          const z = -runtime.roomLength / 2 + 4 + i * ((runtime.roomLength - 8) / Math.max(1, runtime.requiredResonators - 1));
+          const x = (i % 2 ? 1 : -1) * (runtime.chaseRoom ? 1.8 : runtime.roomWidth / 2 - 1.25);
+          const z = runtime.chaseRoom ? runtime.roomLength/2-8-(i+1)*(runtime.roomLength-18)/5 : -runtime.roomLength / 2 + 4 + i * ((runtime.roomLength - 8) / Math.max(1, runtime.requiredResonators - 1));
           const resonator = createStation("resonator", runtime.haidIniActive ? 0xff6a00 : 0xff375f); resonator.scale.setScalar(runtime.haidIniActive ? 0.44 : 0.62); resonator.position.set(x, 0, z);
           resonator.rotation.y = x < 0 ? Math.PI / 2 : -Math.PI / 2; runtime.roomGroup.add(resonator);
           runtime.stations.push({ object: resonator, kind: "resonator", activated: false });
@@ -1311,7 +1340,14 @@ export default function IonGame() {
       if (runtime.persHubActive) addPersHub();
       buildDoor();
       const chase = runtime.chaseRoom;
-      if (chase) { buildChaseCourse(rand); if ((runtime.banishedUntil.blob ?? 0) < room) addBlobChase(); runtime.doorUnlocked = true; runtime.doorOpening = true; }
+      addNoiseEncounter();
+      if (chase) {
+        runtime.pickups.filter(p=>p.mandatory).forEach(p=>p.object.position.set(0,.7,runtime.roomLength/2-5));
+        buildChaseCourse(rand);
+        if (runtime.chaseState?.type === "remetons" && room === runtime.chaseState.start) beginInfection();
+        else if ((runtime.banishedUntil[runtime.chaseState?.type === "remetons" ? "remetons" : "blob"] ?? 0) < room) addBlobChase();
+        runtime.doorUnlocked = false;
+      }
       if (runtime.haidIniActive) addEnemy("haidini", rand);
       const canSpawn = (kind: EnemyKind) => !runtime.persHubActive && (runtime.banishedUntil[kind] ?? 0) < room;
       if (room > 14 && !chase && !runtime.haidIniActive && canSpawn("sound") && rand() < 0.16 + runtime.tier * 0.05) addEnemy("sound", rand);
@@ -1321,19 +1357,19 @@ export default function IonGame() {
       if (room > 55 && !chase && !runtime.haidIniActive && canSpawn("watcher") && rand() < 0.15 + runtime.tier * 0.04) addEnemy("watcher", rand);
       if (room > 105 && !chase && !runtime.haidIniActive && rand() < 0.2 + runtime.tier * 0.035) { const extra = rand() < 0.5 ? "crawler" : "watcher"; if (canSpawn(extra)) addEnemy(extra, rand); }
       addBasdinoCompanions();
-      if (chase) runtime.objective = `BLOB CHASE ${runtime.chaseLevel}/7 · RUN TO THE EXIT`;
+      if (chase) runtime.objective = `CHASE ${room-runtime.chaseState!.start+1}/5 · TUNE FOUR RESONATORS`;
       else if (runtime.haidIniActive) runtime.objective = "HAID-INI · Tune resonators 0/30";
       else if (runtime.persHubActive) runtime.objective = "Trade Fluorite with Noble Pers";
       else if (runtime.mandatoryCrystal && !runtime.mandatoryCollected) runtime.objective = `Recover ${CRYSTALS[runtime.mandatoryCrystal].label} specimen`;
       else if (runtime.requiredResonators > 0) runtime.objective = `Tune resonators 0/${runtime.requiredResonators}`;
       else if (room === 200) runtime.objective = "Extraction signal acquired";
       else runtime.objective = "Reach the pressure door";
-      if (chase) {
+      if (chase && room === runtime.chaseState!.start) {
         runtime.checkpoint = snapshot();
         try { localStorage.setItem("ion-checkpoint", JSON.stringify(runtime.checkpoint)); } catch { /* best effort */ }
         notify(`CHASE ${runtime.chaseLevel}/7 · THE BLOB IS BEHIND YOU`);
       }
-      updateDoorIndicator(); updateHud(true); notify(grinRoll ? "7% GRIN ROLL HIT · BREACH IN 10 SECONDS" : `ROOM ${String(room).padStart(3, "0")} · ${runtime.roomName.toUpperCase()}`);
+      refreshObjective(); updateDoorIndicator(); updateHud(true); notify(grinRoll ? "7% GRIN ROLL HIT · BREACH IN 10 SECONDS" : `ROOM ${String(room).padStart(3, "0")} · ${runtime.roomName.toUpperCase()}`);
       if (room === 200) {
         if (runtime.discovered.size === CRYSTAL_KEYS.length) {
           runtime.won = true; runtime.running = false; showScreen("win"); if (document.pointerLockElement) document.exitPointerLock();
@@ -1342,12 +1378,13 @@ export default function IonGame() {
     }
 
     function snapshot(): SaveData {
-      return { room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
+      return { chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
         discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion, lightInfusion: runtime.lightInfusion,
         accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
         wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil } };
     }
     function applySave(save: SaveData) {
+      runtime.chaseState = save.chaseState ?? null;
       runtime.ammo = save.ammo; runtime.battery = save.battery; runtime.crystals = { ...save.crystals };
       runtime.discovered = new Set(save.discovered); runtime.gunInfusion = save.gunInfusion; runtime.lightInfusion = save.lightInfusion;
       runtime.accessKeys = save.accessKeys;
@@ -1356,6 +1393,7 @@ export default function IonGame() {
       runtime.banishedUntil = { ...(save.banishedUntil ?? {}) }; runtime.checkpoint = save; buildRoom(save.room);
     }
     function resetRun() {
+      runtime.chaseState = null;
       runtime.ammo = 6; runtime.maxAmmo = 8; runtime.battery = 100; runtime.crystals = EMPTY_COUNTS(); runtime.discovered.clear();
       runtime.gunInfusion = null; runtime.lightInfusion = null; runtime.accessKeys = 0;
       runtime.grinRoom = -1; runtime.grinTargetRoom = -1; runtime.grinTeleportTimer = 0; runtime.grinWarningTimer = 0; runtime.grinIncoming = false; runtime.hiding = false;
@@ -1372,25 +1410,26 @@ export default function IonGame() {
       if (runtime.dead || runtime.won) return; runtime.running = true; runtime.cameraMode = false; showScreen(null); runtime.audio?.resume();
       if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock();
     }
-    function kill(reason: string) {
-      if (runtime.dead || runtime.spawnGrace > 0) return;
-      if (runtime.wardCharges > 0) {
+    function kill(reason: string, kind: EnemyKind = "entity") {
+      if (runtime.dead || runtime.spawnGrace > 0 && kind !== "noise") return;
+      if (runtime.wardCharges > 0 && kind !== "noise") {
         runtime.wardCharges -= 1; runtime.spawnGrace = 4;
         runtime.enemies.forEach((enemy) => { if (enemy.alive) enemy.object.position.add(enemy.object.position.clone().sub(runtime.player).setY(0).normalize().multiplyScalar(6)); });
         runtime.audio?.pulse("teleport"); notify("CRYSTAL WARD SHATTERED · CONTACT NEGATED"); updateHud(true); return;
       }
-      if (runtime.basdinos > 0) {
+      if (runtime.basdinos > 0 && kind !== "noise") {
         runtime.basdinos -= 1; const model = runtime.basdinoModels.pop(); if (model) { runtime.roomGroup.remove(model); disposeModel(model); } runtime.spawnGrace = 4;
         runtime.enemies.forEach((enemy) => { if (enemy.alive) enemy.object.position.add(enemy.object.position.clone().sub(runtime.player).setY(0).normalize().multiplyScalar(7)); });
         runtime.audio?.pulse("teleport"); notify("BASDINO SACRIFICED ITSELF · BONUS LIFE USED"); updateHud(true); return;
       }
-      runtime.dead = true; runtime.running = false; runtime.objective = reason;
-      runtime.audio?.jumpscare(); document.body.dataset.jumpscare = "true"; showScreen("dead");
+      runtime.dead = true; runtime.running = false; runtime.transition=0; runtime.objective = reason;
+      beginJumpscare(kind); runtime.audio?.jumpscare(kind); document.body.dataset.jumpscare = "true"; showScreen("dead");
       window.setTimeout(() => { delete document.body.dataset.jumpscare; }, 1250);
       if (document.pointerLockElement) document.exitPointerLock(); updateHud(true);
     }
     function removeEnemy(enemy: Enemy) { enemy.alive = false; runtime.roomGroup.remove(enemy.object); disposeModel(enemy.object); }
     function fire() {
+      if (runtime.infectionTime >= 0) return;
       if (!runtime.running || runtime.cameraMode || screenRef.current) return;
       if (runtime.hiding) { runtime.audio?.pulse("error"); notify("TRAPDOOR SEALED · FIRING BLOCKED"); return; }
       if (runtime.ammo <= 0) { runtime.audio?.pulse("error"); notify("CHAMBER EMPTY · CRAFT AMMUNITION"); return; }
@@ -1402,7 +1441,8 @@ export default function IonGame() {
       const hit = ray.intersectObjects(targets, false)[0];
       if (hit) {
         const enemy = runtime.enemies.find((candidate) => candidate.alive && ancestorOf(hit.object, candidate.object));
-        if (enemy) { if (enemy.kind === "blob") { notify("THE BLOB ABSORBED THE IMPACT · RUN"); }
+        if (enemy) { if (enemy.kind === "blob" || enemy.kind === "remetons") { notify("THE BLOB ABSORBED THE IMPACT · RUN"); }
+          else if (enemy.kind === "noise") { notify("NOISE HAS NO PHYSICAL BODY · COLLECT FIVE SPECIMENS"); }
           else if (enemy.kind === "haidini") { notify("HAID-INI IGNORES GUNFIRE · TUNE ALL 30 RESONATORS"); }
           else if (enemy.kind === "entity") {
             removeEnemy(enemy); runtime.grinRoom = -1; runtime.grinTargetRoom = -1;
@@ -1418,13 +1458,19 @@ export default function IonGame() {
       runtime.flashlightOn = !runtime.flashlightOn; runtime.flashlight.visible = runtime.flashlightOn; runtime.luxuryLight.visible = runtime.flashlightOn; updateHud(true);
     }
     function jump() {
+      if (runtime.infectionTime >= 0) return;
       if (!runtime.running || runtime.cameraMode || runtime.hiding || !runtime.grounded) return;
       runtime.verticalVelocity = 6.7; runtime.grounded = false; runtime.audio?.pulse("step");
     }
     function collect(index: number) {
       const pickup = runtime.pickups[index]; if (!pickup || !pickup.object.parent) return;
       runtime.roomGroup.remove(pickup.object); disposeModel(pickup.object); runtime.pickups.splice(index, 1); runtime.audio?.pulse("pickup");
-      if (pickup.kind === "crystal" && pickup.crystal) {
+      if (pickup.kind === "specimen") {
+        runtime.noiseCount += 1;
+        runtime.enemies.filter(e=>e.kind==="blob"||e.kind==="remetons").forEach(e=>e.stunTimer=Math.max(e.stunTimer??0,.65));
+        if (runtime.noiseCount >= 5) {runtime.noiseActive=false;runtime.enemies.filter(e=>e.kind==="noise"&&e.alive).forEach(removeEnemy);notify("5/5 SPECIMENS · NOISE SILENCED");}
+        else notify(`NOISE SPECIMEN ${runtime.noiseCount}/5`);
+      } else if (pickup.kind === "crystal" && pickup.crystal) {
         runtime.crystals[pickup.crystal] += 1; const first = !runtime.discovered.has(pickup.crystal); runtime.discovered.add(pickup.crystal);
         if (pickup.mandatory || pickup.crystal === runtime.mandatoryCrystal) runtime.mandatoryCollected = true;
         notify(first ? `${CRYSTALS[pickup.crystal].label.toUpperCase()} DISCOVERED · INFUSION UNLOCKED` : `${CRYSTALS[pickup.crystal].label.toUpperCase()} +1`);
@@ -1433,10 +1479,18 @@ export default function IonGame() {
       refreshObjective(); updateHud(true);
     }
     function refreshObjective() {
-      if (runtime.haidIniActive && runtime.activeResonators < 30) runtime.objective = `HAID-INI · Tune resonators ${runtime.activeResonators}/30`;
+      runtime.doorUnlocked = exitRequirements(runtime.activeResonators,runtime.requiredResonators,runtime.noiseActive,runtime.mandatoryCollected);
+      if (runtime.chaseRoom) {
+        runtime.objective = `CHASE ${runtime.room-runtime.chaseState!.start+1}/5 · RESONATORS ${runtime.activeResonators}/4 · SPECIMENS ${runtime.noiseCount}/5`;
+        if (runtime.doorUnlocked) {runtime.doorOpening=true;runtime.objective="RESONANCE LOCK RELEASED · RUN THROUGH THE GATE";}
+        updateDoorIndicator();return;
+      }
+      if (runtime.noiseActive) runtime.objective = `NOISE · Recover specimens ${runtime.noiseCount}/5`;
+      else if (runtime.haidIniActive && runtime.activeResonators < 30) runtime.objective = `HAID-INI · Tune resonators ${runtime.activeResonators}/30`;
       else if (runtime.mandatoryCrystal && !runtime.mandatoryCollected) runtime.objective = `Recover ${CRYSTALS[runtime.mandatoryCrystal].label} specimen`;
       else if (runtime.requiredResonators > runtime.activeResonators) runtime.objective = `Tune resonators ${runtime.activeResonators}/${runtime.requiredResonators}`;
-      else { runtime.doorUnlocked = true; runtime.objective = "Pressure door unlocked"; updateDoorIndicator(); }
+      else { runtime.doorUnlocked = true; runtime.objective = "Pressure door unlocked"; }
+      updateDoorIndicator();
     }
     function openStation(kind: Station["kind"], station?: Station) {
       if (kind === "trapdoor") {
@@ -1453,6 +1507,7 @@ export default function IonGame() {
       }
       if (kind === "resonator") {
         if (station && !station.activated) { station.activated = true; runtime.activeResonators += 1;
+          if(runtime.chaseRoom)runtime.enemies.filter(e=>e.kind==="blob"||e.kind==="remetons").forEach(e=>e.stunTimer=1.8);
           station.object.traverse((child) => { if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) child.material.emissive?.set(0x37ffb2); });
           runtime.audio?.pulse("pickup");
           if (runtime.haidIniActive && runtime.activeResonators >= 30) {
@@ -1465,10 +1520,12 @@ export default function IonGame() {
       runtime.running = false; showScreen(kind); if (document.pointerLockElement) document.exitPointerLock();
     }
     function interact() {
+      if (runtime.infectionTime >= 0) return;
       if (!runtime.running || runtime.cameraMode || screenRef.current) return; const nearest = runtime.nearest; if (!nearest) return;
       if (nearest.kind === "pickup" && nearest.index !== undefined) collect(nearest.index);
       if (nearest.kind === "station" && nearest.index !== undefined) { const station = runtime.stations[nearest.index]; if (station) openStation(station.kind, station); }
       if (nearest.kind === "door") {
+        if (runtime.noiseActive || runtime.chaseRoom && !runtime.doorUnlocked) {notify("RESONANCE LOCK · COMPLETE SPECIMENS AND RESONATORS");return;}
         if (runtime.haidIniActive && runtime.activeResonators < 30) { runtime.audio?.pulse("error"); notify("HAID-INI LOCKDOWN · CRYSTAL KEYS REJECTED"); return; }
         if (!runtime.doorUnlocked && runtime.accessKeys > 0) { runtime.accessKeys -= 1; runtime.doorUnlocked = true; updateDoorIndicator(); notify("CRYSTAL KEY ACCEPTED"); }
         if (runtime.doorUnlocked) { runtime.doorOpening = true; runtime.audio?.pulse("door"); runtime.objective = "Proceed to the next room"; }
@@ -1512,7 +1569,7 @@ export default function IonGame() {
       runtime.crystals.fluorite -= 10; runtime.basdinos += 1; addBasdinoCompanions();
       runtime.audio?.pulse("pickup"); notify("BASDINO BONDED · ONE SACRIFICIAL BONUS LIFE"); updateHud(true);
     }
-    function openInventory() { runtime.running = false; showScreen("inventory"); if (document.pointerLockElement) document.exitPointerLock(); }
+    function openInventory() { if(runtime.infectionTime>=0)return; runtime.running = false; showScreen("inventory"); if (document.pointerLockElement) document.exitPointerLock(); }
     function useItem(key: ItemKey) {
       if (runtime.inventory[key] <= 0) return;
       if (key === "soul") { showScreen("banish"); return; }
@@ -1530,7 +1587,8 @@ export default function IonGame() {
       runtime.enemies.filter((enemy) => enemy.kind === kind && enemy.alive).forEach(removeEnemy);
       if (kind === "entity") { runtime.grinRoom = -1; runtime.grinIncoming = false; runtime.grinWarningTimer = 0; runtime.roomEntitySpawned = true; }
       if (kind === "haidini") { runtime.haidIniActive = false; runtime.requiredResonators = 0; runtime.activeResonators = 0; refreshObjective(); }
-      if (kind === "blob") { runtime.doorUnlocked = true; runtime.doorOpening = true; }
+      if (kind === "noise") {runtime.noiseActive=false;runtime.noiseCount=5;}
+      refreshObjective();
       runtime.audio?.pulse("teleport"); notify(`${kind.toUpperCase()} BANISHED FOR 15 ROOMS`); showScreen("inventory"); updateHud(true);
     }
     function close() { runtime.cameraMode = false; runtime.running = true; showScreen(null); if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock(); }
@@ -1567,7 +1625,7 @@ export default function IonGame() {
       });
       runtime.stations.forEach((station, index) => {
         const distance = station.object.position.distanceTo(runtime.player);
-        if (distance < bestDistance) { bestDistance = distance; runtime.nearest = { kind: "station", index };
+        if (distance < bestDistance && !(station.kind === "resonator" && station.activated)) { bestDistance = distance; runtime.nearest = { kind: "station", index };
           runtime.prompt = station.kind === "trapdoor" ? runtime.chaseRoom ? "TRAPDOOR JAMMED · KEEP RUNNING" : runtime.haidIniActive ? runtime.hiding ? "E  EXIT · HAID-INI CAN ENTER" : "E  HIDE · UNSAFE FROM HAID-INI" : runtime.hiding ? "E  EXIT TRAPDOOR" : "E  HIDE IN TRAPDOOR"
             : station.kind === "resonator" ? station.activated ? "RESONATOR STABLE" : "E  TUNE RESONATOR"
             : `E  USE ${station.kind.replace("infusionsmith", "INFUSIONSMITH").toUpperCase()}`; }
@@ -1627,10 +1685,13 @@ export default function IonGame() {
       if (runtime.transition <= 0 && runtime.player.z < -runtime.roomLength / 2 - 0.82 && runtime.doorProgress > 0.82) { runtime.transition = 1; runtime.transitionDirection = 1; }
     }
     function updateEnemies(dt: number) {
+      if(runtime.dead)return;
       const movingFast = runtime.keysDown.has("ShiftLeft") || runtime.keysDown.has("ShiftRight") || runtime.touchMove.sprint;
       const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); let mainDistance = 99;
       runtime.enemies.forEach((enemy) => {
         if (!enemy.alive) return; enemy.phase += dt;
+        if(enemy.kind==="noise"){animateMonster(enemy.object,enemy.phase,false);enemy.object.rotation.y=Math.sin(enemy.phase)*.18;return;}
+        enemy.stunTimer=Math.max(0,(enemy.stunTimer??0)-dt);
         if (enemy.kind === "entity" && enemy.phase >= 15) {
           removeEnemy(enemy); runtime.grinRoom = -1; runtime.grinTargetRoom = -1;
           runtime.grinIncoming = false; runtime.grinWarningTimer = 0; runtime.roomEntitySpawned = true;
@@ -1639,7 +1700,6 @@ export default function IonGame() {
         }
         const toPlayer = runtime.player.clone().sub(enemy.object.position); toPlayer.y = 0; const distance = toPlayer.length();
         if (enemy.kind === "entity" || enemy.kind === "blob" || enemy.kind === "haidini") mainDistance = Math.min(mainDistance, distance);
-        if (enemy.kind === "wraith") { const material = enemy.object.userData.wraithMaterial as THREE.MeshStandardMaterial; material.opacity = runtime.cameraMode ? 0.72 : 0; }
         if (runtime.spawnGrace > 0) return;
         let shouldMove = true;
         if (enemy.kind === "sound") shouldMove = movingFast || runtime.footstepTimer > 0.15;
@@ -1662,17 +1722,18 @@ export default function IonGame() {
           movementTarget = hunting ? toPlayer : enemy.wanderTarget.clone().sub(enemy.object.position);
           movementTarget.y = 0; movementSpeed = hunting ? enemy.speed : 1.25 + runtime.tier * 0.13;
         }
+        shouldMove=shouldMove && enemy.stunTimer<=0;
         if (shouldMove && movementTarget.length() > 0.02) {
           enemy.object.position.add(movementTarget.normalize().multiplyScalar(movementSpeed * dt));
           const lookAt = enemy.kind === "entity" && movementTarget !== toPlayer ? enemy.wanderTarget : runtime.player;
-          enemy.object.lookAt(lookAt.x, enemy.object.position.y + 1.1, lookAt.z);
-          if (enemy.kind === "entity" || enemy.kind === "blob" || enemy.kind === "haidini") enemy.object.rotateY(Math.PI);
+          enemy.object.lookAt(lookAt.x, enemy.object.position.y, lookAt.z);
         }
         animateModel(enemy.object, dt, shouldMove ? 1 : 0);
+        animateMonster(enemy.object,enemy.phase,shouldMove);
         if (enemy.kind === "entity") {
           enemy.object.position.y = Math.sin(enemy.phase * 4.2) * 0.045;
           enemy.object.children.forEach((child) => { if (child.userData.limb) child.rotation.x = Math.sin(enemy.phase * 7 + child.userData.limb) * 0.36; });
-        } else if (enemy.kind === "blob") {
+        } else if (enemy.kind === "blob" || enemy.kind === "remetons") {
           const pulse = 1 + Math.sin(enemy.phase * 5.2) * 0.035; const baseScale = 0.92 + runtime.chaseLevel * 0.035;
           enemy.object.scale.set(baseScale * pulse, baseScale / pulse, baseScale * pulse);
           enemy.object.children.forEach((child) => { if (child.userData.tendril !== undefined) child.rotation.x += Math.sin(enemy.phase * 6 + child.userData.tendril) * dt * 0.22; });
@@ -1683,14 +1744,19 @@ export default function IonGame() {
         else if (enemy.kind === "watcher") { enemy.object.position.y = 0.18 + Math.sin(enemy.phase * 2.4) * 0.18; enemy.object.rotation.z = Math.sin(enemy.phase * 1.7) * 0.08; }
         else if (enemy.kind === "crawler") { enemy.object.position.y = Math.max(0, Math.sin(enemy.phase * 10) * 0.025); enemy.object.children.forEach((child) => { if (child.userData.limb !== undefined) child.rotation.x = Math.sin(enemy.phase * 13 + child.userData.limb) * 0.42; }); }
         else if (enemy.kind === "sound") enemy.object.position.y = Math.max(0, Math.sin(enemy.phase * 8) * 0.04);
-        const lethalDistance = enemy.kind === "blob" ? 2.05 : enemy.kind === "haidini" ? 1.08 : enemy.kind === "entity" ? 0.92 : enemy.kind === "wraith" ? 0.7 : 0.62;
-        if (distance < lethalDistance && (!runtime.hiding || enemy.kind === "haidini")) kill(enemy.kind === "blob" ? "THE BLOB CONSUMED YOU" : enemy.kind === "haidini" ? "HAID-INI ENTERED THE TRAPDOOR" : enemy.kind === "entity" ? "THE ENTITY MADE CONTACT" : `${enemy.kind.toUpperCase()} ENTITY BREACHED YOUR SUIT`);
+        const lethalDistance = enemy.kind === "blob" || enemy.kind === "remetons" ? 2.05 : enemy.kind === "haidini" ? 1.08 : enemy.kind === "entity" ? 0.92 : enemy.kind === "wraith" ? 0.7 : 0.62;
+        if (distance < lethalDistance && (!runtime.hiding || enemy.kind === "haidini")) kill(enemy.kind === "remetons" ? "INFECTED PERS CONSUMED YOU" : enemy.kind === "blob" ? "THE BLOB CONSUMED YOU" : enemy.kind === "haidini" ? "HAID-INI ENTERED THE TRAPDOOR" : enemy.kind === "entity" ? "THE ENTITY MADE CONTACT" : `${enemy.kind.toUpperCase()} ENTITY BREACHED YOUR SUIT`,enemy.kind);
       });
       const main = runtime.enemies.find((enemy) => (enemy.kind === "entity" || enemy.kind === "blob" || enemy.kind === "haidini") && enemy.alive);
       runtime.audio?.setEntity(main?.object.position ?? new THREE.Vector3(), mainDistance, Boolean(main));
     }
     function updateWorld(dt: number) {
       runtime.spawnGrace = Math.max(0, runtime.spawnGrace - dt);
+      if(runtime.noiseActive){
+        runtime.noiseTime=Math.max(0,runtime.noiseTime-dt);runtime.noisePulseTimer-=dt;
+        if(runtime.noisePulseTimer<=0){runtime.audio?.pulse("error");runtime.noisePulseTimer=Math.max(.8,runtime.noiseTime/15);}
+        if(runtime.noiseTime<=0){kill("NOISE RUPTURED YOUR EARDRUMS · FIVE SPECIMENS WERE REQUIRED","noise");return;}
+      }
       if (runtime.chaseRoom || runtime.haidIniActive || runtime.persHubActive) {
         runtime.enemies.filter((enemy) => enemy.kind === "entity" && enemy.alive).forEach(removeEnemy);
         runtime.grinIncoming = false; runtime.grinWarningTimer = 0; runtime.roomEntitySpawned = true;
@@ -1731,6 +1797,11 @@ export default function IonGame() {
           if (distance < 0.78 && hazard.cooldown <= 0) {
             const launchDistance = runtime.chaseRoom ? 11 + runtime.chaseLevel * 1.25 : 8;
             const minimumZ = -runtime.roomLength / 2 + 1.4; let targetZ = Math.max(minimumZ, runtime.player.z - launchDistance);
+            if(runtime.chaseRoom){
+              const pending=[...runtime.stations.filter(s=>s.kind==="resonator"&&!s.activated).map(s=>s.object.position.z),...runtime.pickups.filter(p=>p.kind==="specimen"||p.mandatory).map(p=>p.object.position.z)]
+                .filter(z=>z<runtime.player.z-1).sort((a,b)=>b-a);
+              if(pending.length)targetZ=Math.max(targetZ,pending[0]+1.6);
+            }
             for (let attempt = 0; attempt < 5; attempt += 1) {
               const landingBox = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(runtime.player.x, 1.2, targetZ), new THREE.Vector3(0.72, 2.1, 0.72));
               if (!runtime.obstacles.some((box) => box.intersectsBox(landingBox))) break;
@@ -1799,11 +1870,13 @@ export default function IonGame() {
     function animate(now: number) {
       if (disposed) return;
       const dt = Math.min(0.05, (now - runtime.lastFrame) / 1000 || 0.016); runtime.lastFrame = now; runtime.hudTimer += dt;
-      if (runtime.transition > 0) { runtime.transition -= dt * 1.65; if (runtime.transition <= 0) { const nextRoom = runtime.room + 1; runtime.transitionDirection = 0; buildRoom(nextRoom); } }
+      if (runtime.transition > 0 && runtime.running && !runtime.dead) { runtime.transition -= dt * 1.65; if (runtime.transition <= 0) { const nextRoom = runtime.room + 1; runtime.transitionDirection = 0; buildRoom(nextRoom); } }
       if (runtime.running && !runtime.dead && !runtime.won) {
+        if(runtime.infectionTime>=0){updateInfection(dt);renderer.render(scene,camera);animationFrame=requestAnimationFrame(animate);return;}
         if (runtime.cameraMode) renderCameraMode(); else { runtime.gunModel.visible = true; runtime.flashlight.visible = runtime.flashlightOn; runtime.luxuryLight.visible = runtime.flashlightOn; updateMovement(dt); }
         updateWorld(dt); updateEnemies(dt); updateHud();
       } else if (!runtime.cameraMode) { camera.position.copy(runtime.player); camera.rotation.order = "YXZ"; camera.rotation.set(runtime.pitch, runtime.yaw, 0); }
+      if(runtime.dead)updateJumpscare(dt);
       renderer.render(scene, camera); animationFrame = requestAnimationFrame(animate);
     }
     function onResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6)); renderer.setSize(window.innerWidth, window.innerHeight); }
@@ -1848,8 +1921,10 @@ export default function IonGame() {
     : grinRoomGap === 1 ? "ONE ROOM AWAY" : grinRoomGap >= 999 ? "NO SIGNAL" : `${grinRoomGap} ROOMS AWAY`;
 
   return (
-    <main className={`ion-shell ${hud.entityDistance < 8 ? "entity-near" : ""} ${hud.grinWarning ? "grin-warning" : ""} ${hud.hiding ? "trapdoor-hidden" : ""}`}>
+    <main className={`ion-shell ${hud.entityDistance < 8 ? "entity-near" : ""} ${hud.grinWarning ? "grin-warning" : ""} ${hud.hiding ? "trapdoor-hidden" : ""} ${hud.noiseActive && !screen && !hud.infectionCaption ? "noise-active" : ""}`}>
+      <svg width="0" height="0" aria-hidden="true" className="effect-definitions"><defs><filter id="ion-noise-waves" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.008 0.035" numOctaves="1" seed="8" result="waves"><animate attributeName="baseFrequency" values="0.008 0.035;0.012 0.055;0.008 0.035" dur="3s" repeatCount="indefinite" /></feTurbulence><feDisplacementMap in="SourceGraphic" in2="waves" scale={hud.noiseTime < 10 ? 16 : 7} xChannelSelector="R" yChannelSelector="G" /></filter></defs></svg>
       <canvas ref={canvasRef} className="ion-canvas" aria-label="ION 3D survival-horror game" />
+      {hud.infectionCaption && !screen && <div className="infection-cinema" role="status"><span>REMETONS ENCOUNTER · 2%</span><strong>{hud.infectionCaption}</strong><small>THREAT TIMERS PAUSED DURING TRANSFORMATION</small></div>}
       <div className="fog-layer" /><div className="scanlines" /><div className="vignette" />
       <div className="crosshair" aria-hidden="true"><i /><b /></div>
       {!screen ? <>
@@ -1869,7 +1944,8 @@ export default function IonGame() {
         <section className="hud crystal-rack" aria-label="Collected crystals">
           {CRYSTAL_KEYS.map((key) => <div className={hud.discovered.includes(key) ? "found" : "unknown"} key={key}><i style={{ background: CRYSTALS[key].css }} /><span>{CRYSTALS[key].short}</span><b>{hud.crystals[key]}</b></div>)}
         </section>
-        {hud.chaseLevel > 0 && <div className="chase-alert"><span>BLOB CHASE · LEVEL {hud.chaseLevel}/7</span><strong>{hud.blobDistance.toFixed(1)} M BEHIND</strong><i /></div>}
+        {hud.chaseLevel > 0 && <div className="chase-alert"><span>PURSUIT · ROOM {hud.chaseStage}/5 · LEVEL {hud.chaseLevel}</span><strong>{hud.blobDistance.toFixed(1)} M BEHIND</strong><small>RESONATORS {hud.resonatorsTuned}/4 · SPECIMENS {hud.noiseCount}/5</small><i /></div>}
+        {hud.noiseActive && !hud.infectionCaption && <section className={`noise-alert ${hud.noiseTime<10?"critical":""}`} aria-label="Noise survival countdown"><span>NOISE · PRESSURE RUPTURE</span><strong>{Math.ceil(hud.noiseTime)}s</strong><b>SPECIMENS {hud.noiseCount}/5</b><small>COLLECT THE CYAN CAPSULES · HIDING WILL NOT HELP</small></section>}
         {hud.hiding && <div className="trapdoor-status"><span>TRAPDOOR SEALED</span><strong>{hud.haidIniActive ? "HAID-INI CAN ENTER · MOVE" : "CONTACT IMMUNITY ACTIVE"}</strong><small>E · EXIT HIDING PLACE</small></div>}
         {hud.prompt && !screen && <div className="interaction-prompt">{hud.prompt}</div>}{toast && <div className="toast">{toast}</div>}
       </> : null}
@@ -1898,7 +1974,7 @@ export default function IonGame() {
         </div>
       </section>}
       {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={() => actionRef.current?.start(true)}>RESTART FROM ROOM 001</button></section>}
-      {screen === "dead" && <section className="death-screen overlay-panel compact-panel"><div className="jumpscare-face" aria-hidden="true"><i /><i /><b>{Array.from({ length: 22 }, (_, index) => <span key={index} />)}</b></div><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>IT FOUND YOU</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div><button className="primary-button danger-button" onClick={() => actionRef.current?.restartCheckpoint()}>RETURN TO CHECKPOINT</button><button className="text-button" onClick={() => actionRef.current?.start(true)}>NEW DESCENT</button></div></section>}
+      {screen === "dead" && <section className="death-screen creature-death overlay-panel compact-panel" data-scare={hud.deathKind} style={{"--scare-color":`#${MONSTER_COLORS[hud.deathKind].toString(16).padStart(6,"0")}`} as React.CSSProperties}><div className="scare-distortion" aria-hidden="true" /><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>{MONSTER_NAMES[hud.deathKind]}</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div><button className="primary-button danger-button" onClick={() => actionRef.current?.restartCheckpoint()}>RETURN TO CHECKPOINT</button><button className="text-button" onClick={() => actionRef.current?.start(true)}>NEW DESCENT</button></div></section>}
       {screen === "win" && <section className="win-screen overlay-panel"><span className="eyebrow">EXTRACTION ROOM · SIGNAL RESTORED</span><h2>YOU REACHED<br /><strong>ROOM 200</strong></h2><p>Every infusion is stable. The blast doors open. Something below them keeps smiling.</p><div className="completion-ring" style={{ "--completion": `${discoveredPercent}%` } as React.CSSProperties}><span>7 / 7</span><small>INFUSIONS</small></div><button className="primary-button" onClick={() => actionRef.current?.start(true)}>DESCEND AGAIN</button></section>}
       {screen === "crafter" && <MenuShell title="CRYSTAL CRAFTER" subtitle="Convert finite specimens into survival equipment" onClose={() => actionRef.current?.close()}><div className="recipe-grid">
         <Recipe name="Toxic rounds ×4" cost="1 MAL" note="Restores rifle ammunition" onClick={() => actionRef.current?.craft("ammo")} />
@@ -1919,11 +1995,11 @@ export default function IonGame() {
         {(Object.keys(ITEMS) as ItemKey[]).map((key) => <button key={key} className="item-card" disabled={hud.inventory[key] <= 0} onClick={() => actionRef.current?.useItem(key)} style={{ "--item": ITEMS[key].color } as React.CSSProperties}><span>{hud.inventory[key]} OWNED</span><strong>{ITEMS[key].label}</strong><p>{ITEMS[key].note}</p><i>{key === "soul" ? "CHOOSE TARGET" : "USE ITEM"}</i></button>)}
       </div></MenuShell>}
       {screen === "banish" && <MenuShell title="SOUL OF SADIST" subtitle="Choose one entity class to erase for the next 15 rooms" onClose={() => showScreen("inventory")}><div className="banish-grid">
-        {(["entity", "blob", "haidini", "crawler", "watcher", "sound", "prism", "mimic"] as EnemyKind[]).map((kind) => <button key={kind} onClick={() => actionRef.current?.banish(kind)}><span>SELECT TARGET</span><strong>{kind === "entity" ? "THE GRIN" : kind === "sound" ? "SOUND HUNTER" : kind.toUpperCase()}</strong><i>BANISH 15 ROOMS</i></button>)}
+        {(["entity", "blob", "haidini", "crawler", "watcher", "sound", "prism", "mimic", "noise", "remetons"] as EnemyKind[]).map((kind) => <button key={kind} onClick={() => actionRef.current?.banish(kind)}><span>SELECT TARGET</span><strong>{MONSTER_NAMES[kind]}</strong><i>BANISH 15 ROOMS</i></button>)}
       </div></MenuShell>}
       {screen === "archive" && <MenuShell title="CRYSTAL ARCHIVE" subtitle={`${hud.discovered.length}/7 mineral records recovered`} onClose={() => actionRef.current?.close()}><div className="archive-layout"><div className="archive-list">
         {CRYSTAL_KEYS.map((key) => <article key={key} className={hud.discovered.includes(key) ? "" : "redacted"}><i style={{ background: CRYSTALS[key].css }} /><div><strong>{hud.discovered.includes(key) ? CRYSTALS[key].label : "████████"}</strong><p>{hud.discovered.includes(key) ? CRYSTALS[key].effect : "RECORD CORRUPTED"}</p></div></article>)}
-      </div><div className="entity-file"><span>ENTITY FILE · ION-00 / ION-25 / ION-30</span><h3>THE GRIN · BLOB · HAID-INI · CRAWLER · WATCHER</h3><p>The Grin broadcasts a ten-second red breach warning. Haid-Ini is a slow orange-striped hunter that enters trapdoors and ignores gunfire; tuning all 30 resonators is the only way to banish it. The Blob owns every 25th room.</p><ul><li>Trapdoors stop the Grin, but never Haid-Ini</li><li>Haid-Ini can only be stopped by 30 tuned resonators</li><li>Trapdoors jam during Blob chases</li><li>Watchers freeze inside the flashlight beam</li></ul></div></div></MenuShell>}
+      </div><div className="entity-file"><span>ENTITY FILE · NEON PURSUIT</span><h3>NOISE · REMETONS · THE GRIN · BLOB · HAID-INI</h3><p>Noise warps your vision: collect five cyan specimens before pressure rupture. Remetons has a 2% chance in eligible normal rooms; it infects Pers and begins a five-room chase. Scheduled Blob pursuits start every 25 rooms and last five rooms, with four resonators and five specimens required in each.</p><ul><li>Trapdoors stop the Grin, but cannot protect against Noise or Haid-Ini</li><li>Haid-Ini ignores gunfire: tune 30 resonators</li><li>Chase resonators briefly stagger the Blob; the gates need all four</li><li>Watchers freeze inside the flashlight beam</li><li>Each monster has its own 3D death encounter</li></ul></div></div></MenuShell>}
       {touchCapable && !screen && <div className="touch-controls" aria-label="Touch game controls">
         <div className="move-pad" onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); act?.touchMoveStart(e.clientX, e.clientY, e.pointerId); }} onPointerMove={(e) => act?.touchMoveUpdate(e.clientX, e.clientY, e.pointerId)} onPointerUp={(e) => act?.touchMoveEnd(e.pointerId)} onPointerCancel={(e) => act?.touchMoveEnd(e.pointerId)}><i /><span>MOVE</span></div>
         <div className="look-pad" onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); act?.touchLookStart(e.clientX, e.clientY, e.pointerId); }} onPointerMove={(e) => act?.touchLookUpdate(e.clientX, e.clientY, e.pointerId)} onPointerUp={(e) => act?.touchLookEnd(e.pointerId)} onPointerCancel={(e) => act?.touchLookEnd(e.pointerId)}><span>LOOK</span></div>

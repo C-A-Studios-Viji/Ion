@@ -1,5 +1,33 @@
 # ION 3D assets
 
+## Neon pursuit update
+
+All hostile silhouettes now come from `app/monsterModels.ts`: custom smooth 3D
+surfaces, curved limbs, distinct eyes/mouths and animated details for Grin, Blob,
+Haid-Ini, Crawler, Watcher, Sound Hunter, Prism, Mimic, Wraith, Noise and Remetons.
+The older Alien and Ghost_Skull files remain in the source archive but are no
+longer downloaded by the game. The animated Quaternius Basdino remains in use.
+
+`app/surfaceStyle.ts` rounds static imported props with one subdivision and gentle
+relaxation, smooths normals without changing skinning weights, and supplies
+blue/cyan/purple gradient materials. Crystal tips keep their mineral silhouettes.
+
+### Online jumpscare audio
+
+[Monster Sound Effects 2 by Ogrebane](https://opengameart.org/content/monster-sound-effects-2)
+is licensed **CC0 1.0**, as stated on its original download page. Source archive:
+https://opengameart.org/sites/default/files/monster_sfx_pack_2.zip
+
+Original `monster-1.wav` through `monster-11.wav` are bundled as
+`app/assets/audio/monster-1.ogg` through `monster-11.ogg`. They map respectively
+to Grin, Blob, Haid-Ini, Crawler, Watcher, Sound Hunter, Prism, Mimic, Wraith,
+Noise and Remetons. Processing: maximum 2.5 seconds, mono 32 kHz, Vorbis,
+normalized to -22 LUFS with -6 dBTP ceiling. Playback adds per-creature pitch
+and filtering through the game's master compressor.
+
+The online recordings accompany ION's own animated 3D jumpscares; no third-party
+game footage or unlicensed jumpscare videos are included.
+
 These models are bundled with the game. No model downloads, accounts, or third-party requests are needed while playing. All source packs below are **CC0 1.0 (public domain)**. Original license notices are preserved in `app/assets/licenses/`.
 
 | Author / source pack | Source model | Bundled file / use |

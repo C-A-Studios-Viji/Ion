@@ -14,6 +14,20 @@ repository path as well as a custom domain.
 
 ## 3D model assets
 
+The neon pursuit update adds rounded props, gradient shading, blue skylight
+shafts, redesigned smooth monsters and per-entity 3D jumpscares with CC0 horror
+audio. Noise requires five cyan specimen capsules before its timer expires.
+Scheduled Blob chases occupy rooms 25–29, 50–54, …, 175–179, with four resonators
+and five specimens in every room. Resonators briefly stagger the pursuer.
+Remetons has a 2% roll in eligible normal rooms and transforms Pers into an
+infected Blob before a separate five-room chase. Its starts exclude the first
+five rooms and runs that would overlap a scheduled chase, Pers Hub or extraction.
+
+Run the renderer-independent encounter checks with
+`node --test tests/encounters.test.cjs`. They exercise the actual game closures
+for objective placement, Noise death/collection, key restrictions and infection
+timing, as well as chase boundaries and creature geometry.
+
 ION bundles 19 CC0 models from Kenney and Quaternius for equipment, minerals,
 facility props and animated creatures. See [ASSET_CREDITS.md](ASSET_CREDITS.md)
 for the original sources, licenses and in-game mappings. Custom named monsters

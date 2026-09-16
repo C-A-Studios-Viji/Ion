@@ -137,7 +137,7 @@ body[data-glitch="true"] .scanlines { opacity: .58; transform: skewX(-4deg); }
 .danger { color: var(--red) !important; }
 .death-screen { overflow: hidden; background: radial-gradient(circle at center, rgba(55, 0, 7, .46), rgba(0, 0, 0, .98)); animation: death-flash 1.15s steps(2) both; }
 .death-screen h2 { color: #ff3159; text-shadow: 0 0 40px rgba(255, 20, 70, .34); }
-.death-copy { position: relative; z-index: 3; display: flex; flex-direction: column; align-items: center; opacity: 0; animation: death-copy-in .28s .92s forwards; }
+.death-copy { position: relative; z-index: 3; display: flex; flex-direction: column; align-items: center; opacity: 0; animation: death-copy-in .28s 2.4s forwards; }
 .death-copy > p { color: #a8979a; font: 400 13px var(--font-geist-sans), sans-serif; margin: 0 0 28px; }
 .jumpscare-face { position: absolute; z-index: 5; left: 50%; top: 50%; width: min(720px, 92vw); height: min(650px, 88vh); transform: translate(-50%, -50%) scale(.08) rotate(-8deg); border-radius: 48% 52% 44% 56%; background: radial-gradient(ellipse at center, #111 0 41%, #030303 70%); filter: contrast(1.8); box-shadow: 0 0 140px 80px #000; animation: face-lunge 1.22s cubic-bezier(.04,.82,.12,1) forwards; }
 .jumpscare-face > i { position: absolute; top: 22%; width: 27%; height: 27%; border: 9px solid #d8d7d0; border-radius: 50%; background: #000; box-shadow: 0 0 32px #fff, inset 0 0 24px #000; }
@@ -303,3 +303,31 @@ body[data-glitch="true"] .scanlines { opacity: .58; transform: skewX(-4deg); }
 
 @media (pointer: fine) { .touch-controls { display: none; } }
 @media (prefers-reduced-motion: reduce) { .scanlines, .entity-near .vignette, .ion-shell.grin-warning::after, .tutorial-symbol::before, .tutorial-symbol::after { animation: none; } .jumpscare-face { animation-duration: .45s; } }
+
+.effect-definitions { position: absolute; pointer-events: none; }
+.noise-active .ion-canvas { filter: url(#ion-noise-waves); }
+.noise-alert { position: absolute; z-index: 15; left: 50%; top: 18px; transform: translateX(-50%); width: 245px; padding: 12px 18px; border: 1px solid #53dfff66; border-radius: 18px; background: linear-gradient(135deg,#061b35e8,#051126e8); box-shadow: 0 0 26px #217dff22; text-align: center; color: #9ceaff; }
+.noise-alert span,.noise-alert small { display: block; font-size: 8px; letter-spacing: .12em; }
+.noise-alert strong { display: inline-block; font-size: 29px; margin: 5px 12px 5px 0; }
+.noise-alert b { font-size: 10px; }.noise-alert.critical { border-color: #ff557c; color:#ffb6c9; }
+.chase-alert { background:linear-gradient(135deg,#071a36eb,#051122eb);color:#c4eaff;border-color:#378fdc;box-shadow:0 0 25px #2877ff33;border-radius:14px; }
+.noise-active .chase-alert { top:130px; }
+.chase-alert small { display: block; grid-column:1 / -1; margin-top: 7px; font-size: 9px; letter-spacing: .08em; color:#8fdcff; }
+.infection-cinema { position:absolute; inset:0; z-index:30; pointer-events:none; border-block:9vh solid #020408; display:flex; align-items:center; justify-content:flex-end; flex-direction:column; padding-bottom:26px; color:#e0f1ff; text-align:center; }
+.infection-cinema span { color:#ff4b71;font-size:11px;letter-spacing:.25em; }
+.infection-cinema strong { margin:12px; font-size:clamp(16px,3vw,30px);text-shadow:0 2px 18px #000; }
+.infection-cinema small { font-size:8px;letter-spacing:.12em;color:#8eabc4; }
+.creature-death { background:transparent; backdrop-filter:none; animation:death-curtain 2.8s forwards; }
+.creature-death h2 { color:var(--scare-color);text-shadow:0 0 35px var(--scare-color);font-size:clamp(40px,7vw,90px); }
+.scare-distortion { position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 140px 22px var(--scare-color);opacity:.65;animation:scare-aura 2.4s forwards; }
+[data-scare="noise"] .scare-distortion { background:repeating-radial-gradient(ellipse at center,transparent 0 18px,#7bdfff22 20px 23px,transparent 25px 42px); }
+[data-scare="haidini"] .scare-distortion { background:repeating-linear-gradient(110deg,transparent 0 55px,#0008 55px 85px); }
+[data-scare="crawler"] .scare-distortion { transform-origin:bottom; border:20px solid #15020999; border-radius:45%; }
+[data-scare="watcher"] .scare-distortion { background:radial-gradient(ellipse at center,transparent 20%,#007dc833 40%,#000b 70%); }
+[data-scare="remetons"] .scare-distortion { background:conic-gradient(from 30deg,#0000,#be173a44,#0000,#94052533,#0000); }
+[data-scare="prism"] .scare-distortion { background:conic-gradient(#722dff44,transparent,#00c8ff33,transparent,#722dff44); }
+[data-scare="mimic"] .scare-distortion { background:repeating-linear-gradient(55deg,transparent 0 40px,#37efb722 44px 47px); }
+@keyframes death-curtain { 0%,74% { background:transparent; } 100% { background:#020409ed; } }
+@keyframes scare-aura { 0% { opacity:0; } 15% { opacity:.7; } 85% { opacity:.4; } 100% { opacity:0; } }
+@media(max-width:760px) { .noise-alert { top:105px;width:190px;padding:8px 12px; }.noise-alert strong{font-size:22px}.noise-alert small{font-size:6px}.chase-alert{max-width:88vw}.noise-active .chase-alert{top:203px}.infection-cinema{border-block-width:7vh} }
+@media(prefers-reduced-motion:reduce) { .noise-active .ion-canvas { filter:none; }.scare-distortion{animation:scare-aura 1s forwards} }

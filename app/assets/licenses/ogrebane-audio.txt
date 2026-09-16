@@ -1,0 +1,11 @@
+Monster Sound Effects 2 — Ogrebane
+https://opengameart.org/content/monster-sound-effects-2
+https://opengameart.org/sites/default/files/monster_sfx_pack_2.zip
+Published December 19, 2010. Retrieved September 16, 2026.
+
+License: CC0 1.0 Universal, Public Domain Dedication
+https://creativecommons.org/publicdomain/zero/1.0/
+
+The source page explicitly labels this sound pack CC0.
+Original recordings monster-1.wav through monster-11.wav were transcoded and
+normalized for ION. See ASSET_CREDITS.md for transformations and mappings.

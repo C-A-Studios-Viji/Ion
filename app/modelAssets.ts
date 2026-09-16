@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
+import { roundStaticGeometry, smoothNormals, applyGradient } from "./surfaceStyle";
 
 // Literal URLs let Vite package every model under the GitHub Pages base path.
 export const MODEL_URLS = {
@@ -20,9 +21,7 @@ export const MODEL_URLS = {
   wallPanel: new URL("./assets/wall-panel.glb", import.meta.url).href,
   infuser: new URL("./assets/infuser.glb", import.meta.url).href,
   workbench: new URL("./assets/workbench.glb", import.meta.url).href,
-  alien: new URL("./assets/alien.glb", import.meta.url).href,
   basdino: new URL("./assets/basdino.glb", import.meta.url).href,
-  watcher: new URL("./assets/watcher.glb", import.meta.url).href,
 };
 export type ModelKey = keyof typeof MODEL_URLS;
 type Options = {
@@ -46,6 +45,19 @@ export class ModelAssets {
     await Promise.all(entries.map(async ([key, url]) => {
       try {
         const model = await loader.loadAsync(url);
+        const processed = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
+        model.scene.traverse(node => {
+          if (!(node instanceof THREE.Mesh)) return;
+          const original = node.geometry;
+          let rounded = processed.get(original);
+          if (!rounded) {
+            const baked: THREE.BufferGeometry = node instanceof THREE.SkinnedMesh || key === "crystals" || key === "crystalSmall"
+              ? original.clone() : roundStaticGeometry(original);
+            smoothNormals(baked); processed.set(original, baked); rounded = baked;
+          }
+          node.geometry = rounded;
+        });
+        processed.forEach((_, original) => original.dispose());
         if (this.disposed) disposeModel(model.scene, true);
         else this.models.set(key, model);
       } catch (error) {
@@ -69,8 +81,11 @@ export class ModelAssets {
         const material = source.clone() as THREE.MeshStandardMaterial;
         if (material.color && options.tint !== undefined) {
           material.map = null;
-          material.color.setHex(options.tint);
-          material.roughness = key === "crystals" || key === "crystalSmall" ? 0.24 : 0.62;
+          material.color.setHex(0xffffff);
+          const low = new THREE.Color(options.tint).multiplyScalar(0.38).getHex();
+          const high = new THREE.Color(options.tint).lerp(new THREE.Color(0x8ccfff),0.22).getHex();
+          applyGradient(material,low,high);
+          material.roughness = key === "crystals" || key === "crystalSmall" ? 0.2 : 0.38;
           material.metalness = 0.18;
         }
         if (material.emissive && options.emissive !== undefined) {
