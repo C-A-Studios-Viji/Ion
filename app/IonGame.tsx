@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { ModelAssets, animateModel, disposeModel } from "./modelAssets";
 import { createMonster, animateMonster, MONSTER_NAMES, MONSTER_COLORS, type MonsterKind } from "./monsterModels";
-import { chaseForRoom, chaseRoomRules, exitRequirements, type ChaseState } from "./encounters";
+import { blobChaseMultiplier, chaseForRoom, chaseRoomRules, exitRequirements, type ChaseState } from "./encounters";
 import { gradientMaterial, smoothNormals } from "./surfaceStyle";
 import { HorrorAudio } from "./horrorAudio";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
@@ -983,7 +983,7 @@ export default function IonGame() {
       const object = createEntityModel(kind);
       object.position.set(0, 0, runtime.roomLength / 2 + 10); object.scale.setScalar(0.92 + runtime.chaseLevel * 0.035);
       runtime.roomGroup.add(object);
-      runtime.enemies.push({ object, kind, speed: chaseRoomRules(runtime.room,runtime.chaseState!).speed, alive: true, teleportTimer: 99, phase: 0,
+      runtime.enemies.push({ object, kind, speed: chaseRoomRules(runtime.room,runtime.chaseState!).speed * blobChaseMultiplier(runtime.room), alive: true, teleportTimer: 99, phase: 0,
         wanderTarget: new THREE.Vector3(), wanderTimer: 99 });
     }
 

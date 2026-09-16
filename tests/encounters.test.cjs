@@ -108,3 +108,11 @@ test('rounded props retain finite dimensions, smooth normals and interleaved UVs
   const m=gradientMaterial(0x112244,0x3399ee,.2,true);const shader={uniforms:{},vertexShader:'#include <common>\n#include <begin_vertex>',fragmentShader:'#include <common>\n#include <color_fragment>'};
   m.onBeforeCompile(shader);assert(shader.fragmentShader.includes('float bands'));assert(shader.uniforms.ionLow);assert(!shader.fragmentShader.includes('undefined'));
 });
+
+test('Blob speed ladder increases by 1.5x each room',()=>{
+  const h=gameHarness();const {blobChaseMultiplier}=h.load(path.join(root,'app/encounters.ts'));
+  assert.equal(blobChaseMultiplier(25),1.5);
+  assert.equal(blobChaseMultiplier(26),3);
+  assert.equal(blobChaseMultiplier(27),4.5);
+  assert.equal(blobChaseMultiplier(50),39);
+});
