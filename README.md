@@ -12,6 +12,14 @@ settings, each push to `main` builds and publishes the game automatically.
 The Pages build uses relative asset URLs, so it works from the `/Ion/`
 repository path as well as a custom domain.
 
+## 3D model assets
+
+ION bundles 19 CC0 models from Kenney and Quaternius for equipment, minerals,
+facility props and animated creatures. See [ASSET_CREDITS.md](ASSET_CREDITS.md)
+for the original sources, licenses and in-game mappings. Custom named monsters
+retain their ION designs. Model loading and independent animation rigs live in
+`app/modelAssets.ts`; textures are embedded in the GLB files.
+
 ## Local development
 
 ```bash

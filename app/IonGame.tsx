@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { ModelAssets, animateModel, disposeModel } from "./modelAssets";
 
 type CrystalKey =
   | "malachite"
@@ -140,7 +141,7 @@ type Runtime = {
   flickerLights: THREE.PointLight[];
   hiddenObjects: THREE.Object3D[];
   door: THREE.Group | null;
-  doorPanels: THREE.Mesh[];
+  doorPanels: THREE.Group[];
   doorUnlocked: boolean;
   doorOpening: boolean;
   doorProgress: number;
@@ -607,6 +608,7 @@ export default function IonGame() {
   const [touchCapable, setTouchCapable] = useState(false);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
+  const [assetProgress, setAssetProgress] = useState(0);
 
   const showScreen = (value: Screen) => {
     screenRef.current = value;
@@ -614,8 +616,13 @@ export default function IonGame() {
   };
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const canvasElement = canvasRef.current;
+    if (!canvasElement) return;
+    const canvas = canvasElement;
+    const assets = new ModelAssets();
+    let disposed = false;
+    let assetsReady = false;
+    let animationFrame = 0;
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
@@ -761,6 +768,11 @@ export default function IonGame() {
     function createCrystal(key: CrystalKey, size = 1, collectible = false) {
       const group = new THREE.Group();
       const info = CRYSTALS[key];
+      const imported = key !== "fluorite" && assets.create(collectible ? "crystalSmall" : "crystals", {
+        height: size * (collectible ? 0.72 : 1.15), tint: info.color,
+        emissive: key === "obsidian" ? 0.18 : key === "corrupted" ? 1.1 : 0.48,
+      });
+      if (imported) { imported.userData.crystal = key; return imported; }
       const material = new THREE.MeshPhysicalMaterial({ color: info.color, emissive: info.color,
         emissiveIntensity: key === "obsidian" ? 0.18 : key === "corrupted" ? 1.4 : 0.52,
         roughness: key === "malachite" ? 0.48 : 0.18, metalness: key === "obsidian" ? 0.68 : 0.08,
@@ -822,7 +834,9 @@ export default function IonGame() {
       const group = new THREE.Group();
       const casing = new THREE.MeshStandardMaterial({ color: 0x0d1417, metalness: 0.75, roughness: 0.3 });
       const screenMaterial = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2.2, roughness: 0.2 });
-      const body = new THREE.Mesh(new THREE.BoxGeometry(1.35, 1.25, 0.72), casing); body.position.y = 0.63; body.castShadow = true; group.add(body);
+      const imported = assets.create(kind === "crafter" ? "workbench" : kind === "infusionsmith" ? "infuser" : "computer", { size: [1.35, 1.25, 0.72], tint: 0x38454d });
+      if (imported) group.add(imported);
+      else { const body = new THREE.Mesh(new THREE.BoxGeometry(1.35, 1.25, 0.72), casing); body.position.y = 0.63; body.castShadow = true; group.add(body); }
       const screenMesh = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.48, 0.04), screenMaterial); screenMesh.position.set(0, 0.78, 0.39); group.add(screenMesh);
       const base = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.52, 0.32, 8), casing); base.position.y = 0.16; group.add(base);
       group.userData.station = kind;
@@ -835,7 +849,8 @@ export default function IonGame() {
       const warning = new THREE.MeshStandardMaterial({ color: 0x54202a, emissive: 0x26030b, emissiveIntensity: 0.45, metalness: 0.5, roughness: 0.38 });
       const frame = new THREE.Mesh(new THREE.BoxGeometry(2.15, 0.12, 1.65), steel); frame.position.y = 0.055; group.add(frame);
       const voidMesh = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.08, 1.24), new THREE.MeshBasicMaterial({ color: 0x000000 })); voidMesh.position.y = 0.125; group.add(voidMesh);
-      const lid = new THREE.Mesh(new THREE.BoxGeometry(1.68, 0.1, 1.2), warning); lid.position.set(0, 0.19, 0); lid.castShadow = true; lid.userData.trapdoorLid = true; group.add(lid);
+      const lid = assets.create("hatch", { size: [1.68, 0.1, 1.2], centered: true, tint: 0x642833 }) ?? new THREE.Mesh(new THREE.BoxGeometry(1.68, 0.1, 1.2), warning);
+      lid.position.set(0, 0.19, 0); lid.castShadow = true; lid.userData.trapdoorLid = true; group.add(lid);
       const hinge = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.55, 10), steel); hinge.position.set(0, 0.25, 0.58); hinge.rotation.z = Math.PI / 2; group.add(hinge);
       const handle = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.035, 7, 16, Math.PI), steel); handle.position.set(0, 0.27, -0.28); handle.rotation.x = Math.PI / 2; group.add(handle);
       [-0.7, 0.7].forEach((x) => { const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.015, 1.05), warning); stripe.position.set(x, 0.255, 0); stripe.rotation.y = 0.34; group.add(stripe); });
@@ -859,6 +874,12 @@ export default function IonGame() {
     }
 
     function createBasdinoModel(index: number) {
+      const imported = assets.create("basdino", { height: 0.95, animation: "Walk" });
+      if (imported) {
+        const crest = createCrystal("fluorite", 0.23); crest.position.set(0, 0.84, -0.1); imported.add(crest);
+        const light = new THREE.PointLight(0x68f1df, 7, 3.5); light.position.y = 0.75; imported.add(light);
+        return imported;
+      }
       const group = new THREE.Group();
       const hide = new THREE.MeshPhysicalMaterial({ color: 0x245e4b, emissive: 0x0b291f, emissiveIntensity: 0.7, roughness: 0.38, clearcoat: 0.55 });
       const crystal = new THREE.MeshStandardMaterial({ color: 0x68f1df, emissive: 0x29a995, emissiveIntensity: 1.8, roughness: 0.16 });
@@ -883,7 +904,7 @@ export default function IonGame() {
     }
 
     function addBasdinoCompanions() {
-      runtime.basdinoModels.forEach((model) => runtime.roomGroup.remove(model));
+      runtime.basdinoModels.forEach((model) => { runtime.roomGroup.remove(model); disposeModel(model); });
       runtime.basdinoModels = [];
       for (let index = 0; index < Math.min(runtime.basdinos, 5); index += 1) {
         const model = createBasdinoModel(index); model.position.copy(runtime.player).add(new THREE.Vector3((index - 2) * 0.55, -1.65, 2 + index * 0.45));
@@ -893,6 +914,12 @@ export default function IonGame() {
 
     function createEntityModel(kind: Enemy["kind"]) {
       const group = new THREE.Group();
+      const imported = kind === "watcher"
+        ? assets.create("watcher", { height: 2.5, animation: "Flying_Idle", tint: 0x706786, emissive: 0.18 })
+        : kind === "crawler" || kind === "sound"
+          ? assets.create("alien", { size: kind === "crawler" ? [1.1, 0.72, 1.35] : [1, 2.3, 0.85], animation: "Run", tint: kind === "crawler" ? 0x663540 : 0x364f57, emissive: 0.07 })
+          : null;
+      if (imported) return imported;
       if (kind === "entity") {
         const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.48, 1.7, 5, 10), blackMaterial);
         torso.position.y = 1.45; torso.scale.set(0.62, 1, 0.52); group.add(torso);
@@ -1035,12 +1062,7 @@ export default function IonGame() {
     }
 
     function clearRoom() {
-      runtime.roomGroup.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          (Array.isArray(child.material) ? child.material : [child.material]).forEach((material) => material.dispose());
-        }
-      });
+      disposeModel(runtime.roomGroup);
       runtime.roomGroup.clear();
       runtime.pickups = []; runtime.stations = []; runtime.enemies = []; runtime.hazards = []; runtime.obstacles = [];
       runtime.flickerLights = []; runtime.hiddenObjects = []; runtime.door = null; runtime.doorPanels = [];
@@ -1056,9 +1078,11 @@ export default function IonGame() {
       addMesh(new THREE.BoxGeometry(5.3, 0.35, 0.45), frameMaterial, new THREE.Vector3(0, 4.5, 0), undefined, group);
       addMesh(new THREE.BoxGeometry(0.35, 4.7, 0.45), frameMaterial, new THREE.Vector3(-2.48, 2.2, 0), undefined, group);
       addMesh(new THREE.BoxGeometry(0.35, 4.7, 0.45), frameMaterial, new THREE.Vector3(2.48, 2.2, 0), undefined, group);
-      const left = addMesh(new THREE.BoxGeometry(2.36, 4.1, 0.24), panelMaterial, new THREE.Vector3(-1.19, 2.12, 0), undefined, group);
-      const right = addMesh(new THREE.BoxGeometry(2.36, 4.1, 0.24), panelMaterial, new THREE.Vector3(1.19, 2.12, 0), undefined, group);
-      runtime.doorPanels = [left, right];
+      runtime.doorPanels = [-1, 1].map((side) => {
+        const panel = assets.create("door", { size: [2.36, 4.1, 0.24], centered: true, tint: 0x47555e }) ?? new THREE.Group();
+        if (!panel.children.length) panel.add(new THREE.Mesh(new THREE.BoxGeometry(2.36, 4.1, 0.24), panelMaterial.clone()));
+        panel.position.set(side * 1.19, 2.12, 0); group.add(panel); return panel;
+      });
       const strip = addMesh(new THREE.BoxGeometry(0.12, 3.35, 0.08), glowMaterial, new THREE.Vector3(0, 2.15, 0.19), undefined, group);
       strip.userData.doorIndicator = true; strip.userData.liftingStrip = true;
       const pers = createPersModel(); pers.position.set(3.55, 0, 0.65); pers.rotation.y = -Math.PI / 2; pers.visible = false; group.add(pers);
@@ -1083,7 +1107,7 @@ export default function IonGame() {
         object = new THREE.Group(); const color = kind === "ammo" ? 0xff6b38 : 0x67e8ff;
         const material = new THREE.MeshStandardMaterial({ color: 0x151a1c, metalness: 0.8, roughness: 0.25 });
         const glow = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2.2 });
-        object.add(new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.28, 0.38), material));
+        object.add(assets.create(kind === "ammo" ? "magazine" : "barrel", { size: [0.52, 0.28, 0.38], centered: true, tint: 0x37434a }) ?? new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.28, 0.38), material));
         object.add(new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.3, 0.4), glow));
       }
       object.position.copy(position); object.userData.baseY = position.y; runtime.roomGroup.add(object);
@@ -1214,20 +1238,41 @@ export default function IonGame() {
       if (cave) {
         for (let i = 0; i < 18; i += 1) {
           const side = rand() < 0.5 ? -1 : 1;
-          const rock = addMesh(new THREE.DodecahedronGeometry(0.65 + rand() * 1.25, 1), caveMaterial.clone(),
-            new THREE.Vector3(side * (runtime.roomWidth / 2 - rand() * 0.8), 0.3 + rand() * (runtime.roomHeight - 0.6), (rand() - 0.5) * runtime.roomLength));
+          const radius = 0.65 + rand() * 1.25;
+          const rock = assets.create(i % 2 ? "rock" : "rockWide", { height: radius * 2, centered: true, tint: 0x263b3a }) ?? new THREE.Mesh(new THREE.DodecahedronGeometry(radius, 1), caveMaterial.clone());
+          rock.position.set(side * (runtime.roomWidth / 2 - rand() * 0.8), 0.3 + rand() * (runtime.roomHeight - 0.6), (rand() - 0.5) * runtime.roomLength);
+          runtime.roomGroup.add(rock);
           rock.scale.set(0.7 + rand(), 0.8 + rand() * 1.6, 0.7 + rand());
         }
       } else {
         const pipeMaterial = new THREE.MeshStandardMaterial({ color: 0x252c2e, metalness: 0.86, roughness: 0.3 });
         [-1, 1].forEach((side) => addMesh(new THREE.CylinderGeometry(0.12, 0.12, runtime.roomLength - 1, 10), pipeMaterial,
           new THREE.Vector3(side * (runtime.roomWidth / 2 - 0.68), runtime.roomHeight - 0.62, 0), new THREE.Euler(Math.PI / 2, 0, 0)));
+        for (let i = 0; i < 8; i += 1) {
+          const panel = assets.create("wallPanel", { size: [0.12, 1.8, 2.1], centered: true, tint: 0x334149 });
+          if (panel) { panel.position.set((i % 2 ? 1 : -1) * (runtime.roomWidth / 2 - 0.3), 2.25, -runtime.roomLength / 2 + 4 + Math.floor(i / 2) * (runtime.roomLength - 8) / 3); runtime.roomGroup.add(panel); }
+        }
+        if (!runtime.chaseRoom && !runtime.haidIniActive) {
+          const generator = assets.create("generator", { size: [1.35, 1.65, 1.3], tint: 0x52636a });
+          if (generator) {
+            generator.position.set(-runtime.roomWidth / 2 + 1.2, 0, runtime.roomLength / 2 - 2);
+            runtime.roomGroup.add(generator); runtime.obstacles.push(new THREE.Box3().setFromObject(generator).expandByScalar(0.24));
+          }
+          if (runtime.roomName.includes("Laboratory")) {
+            const bed = assets.create("labBed", { size: [1.2, 0.9, 2.4], tint: 0x6b7678 });
+            if (bed) {
+              bed.position.set(runtime.roomWidth / 2 - 1.2, 0, -4.5); runtime.roomGroup.add(bed);
+              runtime.obstacles.push(new THREE.Box3().setFromObject(bed).expandByScalar(0.24));
+            }
+          }
+        }
       }
       if (runtime.roomName.includes("Storage")) {
         for (let i = 0; i < 8; i += 1) {
           const x = (i % 2 ? 1 : -1) * (runtime.roomWidth / 2 - 2.15); const z = -7 + Math.floor(i / 2) * 4;
           const size = new THREE.Vector3(1.55, 1.2 + rand() * 0.8, 1.45);
-          const crate = addMesh(new THREE.BoxGeometry(size.x, size.y, size.z), baseMaterial.clone(), new THREE.Vector3(x, size.y / 2, z));
+          const crate = assets.create("crate", { size: [size.x, size.y, size.z], centered: true, tint: 0x3e5059 }) ?? new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), baseMaterial.clone());
+          crate.position.set(x, size.y / 2, z); runtime.roomGroup.add(crate);
           runtime.obstacles.push(new THREE.Box3().setFromObject(crate).expandByScalar(0.28));
         }
       }
@@ -1318,6 +1363,7 @@ export default function IonGame() {
       runtime.checkpoint = null; runtime.dead = false; runtime.won = false; buildRoom(1);
     }
     function start(fresh = false) {
+      if (!assetsReady) return;
       if (fresh) resetRun(); if (!runtime.audio) runtime.audio = new AudioEngine(); runtime.audio.resume();
       runtime.running = true; runtime.dead = false; showScreen(null);
       if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock(); updateHud(true);
@@ -1334,7 +1380,7 @@ export default function IonGame() {
         runtime.audio?.pulse("teleport"); notify("CRYSTAL WARD SHATTERED · CONTACT NEGATED"); updateHud(true); return;
       }
       if (runtime.basdinos > 0) {
-        runtime.basdinos -= 1; const model = runtime.basdinoModels.pop(); if (model) runtime.roomGroup.remove(model); runtime.spawnGrace = 4;
+        runtime.basdinos -= 1; const model = runtime.basdinoModels.pop(); if (model) { runtime.roomGroup.remove(model); disposeModel(model); } runtime.spawnGrace = 4;
         runtime.enemies.forEach((enemy) => { if (enemy.alive) enemy.object.position.add(enemy.object.position.clone().sub(runtime.player).setY(0).normalize().multiplyScalar(7)); });
         runtime.audio?.pulse("teleport"); notify("BASDINO SACRIFICED ITSELF · BONUS LIFE USED"); updateHud(true); return;
       }
@@ -1343,7 +1389,7 @@ export default function IonGame() {
       window.setTimeout(() => { delete document.body.dataset.jumpscare; }, 1250);
       if (document.pointerLockElement) document.exitPointerLock(); updateHud(true);
     }
-    function removeEnemy(enemy: Enemy) { enemy.alive = false; runtime.roomGroup.remove(enemy.object); }
+    function removeEnemy(enemy: Enemy) { enemy.alive = false; runtime.roomGroup.remove(enemy.object); disposeModel(enemy.object); }
     function fire() {
       if (!runtime.running || runtime.cameraMode || screenRef.current) return;
       if (runtime.hiding) { runtime.audio?.pulse("error"); notify("TRAPDOOR SEALED · FIRING BLOCKED"); return; }
@@ -1377,7 +1423,7 @@ export default function IonGame() {
     }
     function collect(index: number) {
       const pickup = runtime.pickups[index]; if (!pickup || !pickup.object.parent) return;
-      runtime.roomGroup.remove(pickup.object); runtime.pickups.splice(index, 1); runtime.audio?.pulse("pickup");
+      runtime.roomGroup.remove(pickup.object); disposeModel(pickup.object); runtime.pickups.splice(index, 1); runtime.audio?.pulse("pickup");
       if (pickup.kind === "crystal" && pickup.crystal) {
         runtime.crystals[pickup.crystal] += 1; const first = !runtime.discovered.has(pickup.crystal); runtime.discovered.add(pickup.crystal);
         if (pickup.mandatory || pickup.crystal === runtime.mandatoryCrystal) runtime.mandatoryCollected = true;
@@ -1622,6 +1668,7 @@ export default function IonGame() {
           enemy.object.lookAt(lookAt.x, enemy.object.position.y + 1.1, lookAt.z);
           if (enemy.kind === "entity" || enemy.kind === "blob" || enemy.kind === "haidini") enemy.object.rotateY(Math.PI);
         }
+        animateModel(enemy.object, dt, shouldMove ? 1 : 0);
         if (enemy.kind === "entity") {
           enemy.object.position.y = Math.sin(enemy.phase * 4.2) * 0.045;
           enemy.object.children.forEach((child) => { if (child.userData.limb) child.rotation.x = Math.sin(enemy.phase * 7 + child.userData.limb) * 0.36; });
@@ -1702,6 +1749,7 @@ export default function IonGame() {
         const target = runtime.player.clone().add(new THREE.Vector3(side * (0.75 + index * 0.12), -1.65, back).applyAxisAngle(new THREE.Vector3(0, 1, 0), runtime.yaw));
         model.position.lerp(target, Math.min(1, dt * 4.2)); model.lookAt(runtime.player.x, model.position.y + 0.3, runtime.player.z);
         model.position.y = Math.sin(performance.now() * 0.005 + index) * 0.04;
+        animateModel(model, dt, target.distanceTo(model.position) > 0.2 ? 1 : 0.18);
         model.children.forEach((child) => { if (child.userData.basdinoLeg !== undefined) child.rotation.x = Math.sin(performance.now() * 0.012 + child.userData.basdinoLeg) * 0.35; });
       });
       if (runtime.persActor) {
@@ -1719,10 +1767,14 @@ export default function IonGame() {
         const lift = easedLift * (runtime.roomHeight + 2.8);
         runtime.doorPanels.forEach((panel, index) => {
           panel.position.set(index === 0 ? -1.19 : 1.19, 2.12 + lift, 0);
-          const material = panel.material as THREE.MeshStandardMaterial;
-          material.transparent = true;
-          material.opacity = Math.max(0, 1 - Math.max(0, runtime.doorProgress - 0.34) / 0.66);
-          material.depthWrite = material.opacity > 0.08;
+          panel.traverse((child) => {
+            if (!(child instanceof THREE.Mesh)) return;
+            (Array.isArray(child.material) ? child.material : [child.material]).forEach((material) => {
+              material.transparent = true;
+              material.opacity = Math.max(0, 1 - Math.max(0, runtime.doorProgress - 0.34) / 0.66);
+              material.depthWrite = material.opacity > 0.08;
+            });
+          });
           panel.visible = runtime.doorProgress < 0.985;
         });
         runtime.door?.children.forEach((child) => {
@@ -1745,13 +1797,14 @@ export default function IonGame() {
       camera.lookAt(0, 1.25, -runtime.roomLength / 3); runtime.gunModel.visible = false; runtime.flashlight.visible = false; runtime.luxuryLight.visible = false;
     }
     function animate(now: number) {
+      if (disposed) return;
       const dt = Math.min(0.05, (now - runtime.lastFrame) / 1000 || 0.016); runtime.lastFrame = now; runtime.hudTimer += dt;
       if (runtime.transition > 0) { runtime.transition -= dt * 1.65; if (runtime.transition <= 0) { const nextRoom = runtime.room + 1; runtime.transitionDirection = 0; buildRoom(nextRoom); } }
       if (runtime.running && !runtime.dead && !runtime.won) {
         if (runtime.cameraMode) renderCameraMode(); else { runtime.gunModel.visible = true; runtime.flashlight.visible = runtime.flashlightOn; runtime.luxuryLight.visible = runtime.flashlightOn; updateMovement(dt); }
         updateWorld(dt); updateEnemies(dt); updateHud();
       } else if (!runtime.cameraMode) { camera.position.copy(runtime.player); camera.rotation.order = "YXZ"; camera.rotation.set(runtime.pitch, runtime.yaw, 0); }
-      renderer.render(scene, camera); requestAnimationFrame(animate);
+      renderer.render(scene, camera); animationFrame = requestAnimationFrame(animate);
     }
     function onResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6)); renderer.setSize(window.innerWidth, window.innerHeight); }
     function onKeyDown(event: KeyboardEvent) { runtime.keysDown.add(event.code); if (event.repeat) return; if (event.code === "KeyE") interact(); if (event.code === "KeyF") toggleLight(); if (event.code === "Space") { event.preventDefault(); jump(); } }
@@ -1763,8 +1816,19 @@ export default function IonGame() {
     window.addEventListener("resize", onResize); window.addEventListener("keydown", onKeyDown); window.addEventListener("keyup", onKeyUp);
     window.addEventListener("mousemove", onMouseMove); window.addEventListener("mousedown", onMouseDown); document.addEventListener("pointerlockchange", onPointerLock);
     canvas.addEventListener("contextmenu", (event) => event.preventDefault());
-    buildRoom(1); requestAnimationFrame(animate);
+    buildRoom(1); animationFrame = requestAnimationFrame(animate);
+    void assets.load((loaded, total) => setAssetProgress(Math.round(loaded / total * 100))).then(() => {
+      if (disposed) return;
+      const rifle = assets.create("rifle", { size: [0.22, 0.45, 1.6], centered: true, yaw: Math.PI, tint: 0x42545d });
+      if (rifle) {
+        disposeModel(gunModel); gunModel.clear(); gunModel.add(rifle);
+        const emitter = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.25), new THREE.MeshStandardMaterial({ color: 0x74e5ea, emissive: 0x3bbbc8, emissiveIntensity: 0.65 }));
+        emitter.position.set(0, 0.12, -0.25); gunModel.add(emitter);
+      }
+      buildRoom(1); assetsReady = true; setAssetProgress(100);
+    });
     return () => {
+      disposed = true; cancelAnimationFrame(animationFrame); clearRoom(); disposeModel(gunModel); assets.dispose();
       window.removeEventListener("resize", onResize); window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("mousemove", onMouseMove); window.removeEventListener("mousedown", onMouseDown); document.removeEventListener("pointerlockchange", onPointerLock);
       renderer.dispose(); runtime.audio?.context.close().catch(() => undefined); runtimeRef.current = null;
@@ -1815,11 +1879,11 @@ export default function IonGame() {
           <span><b>7% GRIN ROLL</b> gives 10 seconds to hide</span><span><b>FLUORITE</b> is synthesized currency for Pers</span><span><b>ROOM 25×</b> starts a Blob chase · Hub at 32</span></div></div>
         <button className="primary-button" onClick={() => { setTutorialStep(0); showScreen("tutorial"); }}>START TUTORIAL</button>
         <div className="controls-copy">{touchCapable ? "LEFT PAD MOVE · RIGHT SIDE LOOK · USE THE ACTION BUTTONS" : "WASD MOVE · MOUSE LOOK · SPACE JUMP · CLICK FIRE · E INTERACT · F LIGHT · SHIFT RUN"}</div>
-        <small className={`headphones ${webglUnavailable ? "danger" : ""}`}>{webglUnavailable ? "ION REQUIRES WEBGL 2 · OPEN ON A DEVICE WITH 3D GRAPHICS ENABLED" : "HEADPHONES RECOMMENDED · ONE-TOUCH DEATH · CHECKPOINTS EVERY 25 ROOMS"}</small>
+        <small className={`headphones ${webglUnavailable ? "danger" : ""}`}>{webglUnavailable ? "ION REQUIRES WEBGL 2 · OPEN ON A DEVICE WITH 3D GRAPHICS ENABLED" : assetProgress < 100 ? `PREPARING FACILITY · ${assetProgress}%` : "HEADPHONES RECOMMENDED · ONE-TOUCH DEATH · CHECKPOINTS EVERY 25 ROOMS"}</small>
       </section>}
       {screen === "tutorial" && <section className="tutorial-screen overlay-panel">
         <div className="tutorial-shell">
-          <header className="tutorial-header"><span>ION FIELD INDUCTION · {TUTORIAL_STEPS[tutorialStep].number} / {String(TUTORIAL_STEPS.length).padStart(2, "0")}</span><button disabled={webglUnavailable} onClick={() => actionRef.current?.start(true)}>SKIP TRAINING</button></header>
+          <header className="tutorial-header"><span>ION FIELD INDUCTION · {TUTORIAL_STEPS[tutorialStep].number} / {String(TUTORIAL_STEPS.length).padStart(2, "0")}</span><button disabled={webglUnavailable || assetProgress < 100} onClick={() => actionRef.current?.start(true)}>{assetProgress < 100 ? `LOADING ${assetProgress}%` : "SKIP TRAINING"}</button></header>
           <div className="tutorial-visual" data-step={tutorialStep}>
             <div className="tutorial-symbol">{TUTORIAL_STEPS[tutorialStep].number}</div>
           </div>
@@ -1828,7 +1892,7 @@ export default function IonGame() {
             <div className="tutorial-dots">{TUTORIAL_STEPS.map((step, index) => <i key={step.number} className={index === tutorialStep ? "active" : index < tutorialStep ? "done" : ""} />)}</div>
             <div className="tutorial-actions">
               {tutorialStep > 0 && <button onClick={() => setTutorialStep((step) => step - 1)}>BACK</button>}
-              <button className="primary" disabled={webglUnavailable && tutorialStep === TUTORIAL_STEPS.length - 1} onClick={() => tutorialStep === TUTORIAL_STEPS.length - 1 ? actionRef.current?.start(true) : setTutorialStep((step) => step + 1)}>{tutorialStep === TUTORIAL_STEPS.length - 1 ? (webglUnavailable ? "3D UNAVAILABLE" : "ENTER FACILITY") : "NEXT"}</button>
+              <button className="primary" disabled={(webglUnavailable || assetProgress < 100) && tutorialStep === TUTORIAL_STEPS.length - 1} onClick={() => tutorialStep === TUTORIAL_STEPS.length - 1 ? actionRef.current?.start(true) : setTutorialStep((step) => step + 1)}>{tutorialStep === TUTORIAL_STEPS.length - 1 ? (webglUnavailable ? "3D UNAVAILABLE" : assetProgress < 100 ? `LOADING ${assetProgress}%` : "ENTER FACILITY") : "NEXT"}</button>
             </div>
           </footer>
         </div>
