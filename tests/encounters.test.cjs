@@ -17,7 +17,7 @@ function gameHarness(){
     const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
     const context={module,exports:module.exports,console,URL,Map,Set,Math:Object.assign(Object.create(Math),{random:()=>.5}),
       performance:{now:()=>now},requestAnimationFrame(fn){frame=fn;return 1;},cancelAnimationFrame(){},
-      localStorage:{getItem:k=>saved.get(k)??null,setItem:(k,v)=>saved.set(k,v)},
+      localStorage:{getItem:k=>saved.get(k)??null,setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},
       window:{innerWidth:1280,innerHeight:720,devicePixelRatio:1,matchMedia:()=>({matches:true}),addEventListener(){},removeEventListener(){},setTimeout(){return 1;}},
       document:{body:{dataset:{}},pointerLockElement:null,addEventListener(){},removeEventListener(){},exitPointerLock(){}},
       require(id){
@@ -33,7 +33,7 @@ function gameHarness(){
   const runtime=refs[1].current,act=refs[2].current;runtime.audio=audio;
   const step=(seconds=.05)=>{for(let t=0;t<seconds;t+=.05){now+=50;frame(now);}};
   const enter=(room,chaseState=null)=>{
-    runtime.checkpoint=null;saved.set('ion-checkpoint',JSON.stringify({room,chaseState,ammo:6,battery:100,crystals:{malachite:0,amethyst:0,quartz:0,obsidian:0,citrine:0,fluorite:0,corrupted:0},discovered:[],gunInfusion:null,lightInfusion:null,accessKeys:10,maxAmmo:8}));act.restartCheckpoint();
+    runtime.room=room;runtime.checkpoint=null;saved.set('ion-checkpoint',JSON.stringify({room,chaseState,ammo:6,battery:100,crystals:{malachite:0,amethyst:0,quartz:0,obsidian:0,citrine:0,fluorite:0,corrupted:0},discovered:[],gunInfusion:null,lightInfusion:null,accessKeys:10,maxAmmo:8}));act.restartCheckpoint();
   };
   const useAt=object=>{runtime.player.copy(object.position).add(new THREE.Vector3(0,1.65,0));step();act.interact();};
   return {runtime,act,step,enter,useAt,load};
@@ -109,10 +109,18 @@ test('rounded props retain finite dimensions, smooth normals and interleaved UVs
   m.onBeforeCompile(shader);assert(shader.fragmentShader.includes('float bands'));assert(shader.uniforms.ionLow);assert(!shader.fragmentShader.includes('undefined'));
 });
 
-test('Blob speed ladder increases by 1.5x each room',()=>{
-  const h=gameHarness();const {blobChaseMultiplier}=h.load(path.join(root,'app/encounters.ts'));
-  assert.equal(blobChaseMultiplier(25),1.5);
-  assert.equal(blobChaseMultiplier(26),3);
-  assert.equal(blobChaseMultiplier(27),4.5);
-  assert.equal(blobChaseMultiplier(50),39);
+test('Blob speed rises gently and matches sprint speed in the fifth room',async()=>{
+  const h=gameHarness();const {blobChaseSpeed}=h.load(path.join(root,'app/encounters.ts'));const chase={start:25,type:'blob'};
+  assert(Math.abs(blobChaseSpeed(25,chase,5.1)-5.1*.72)<1e-9);
+  assert(Math.abs(blobChaseSpeed(26,chase,5.1)-5.1*.79)<1e-9);
+  assert(Math.abs(blobChaseSpeed(27,chase,5.1)-5.1*.86)<1e-9);
+  assert(Math.abs(blobChaseSpeed(28,chase,5.1)-5.1*.93)<1e-9);
+  assert(Math.abs(blobChaseSpeed(29,chase,5.1)-5.1)<1e-9);
+  await Promise.resolve();await Promise.resolve();h.enter(29);
+  const blob=h.runtime.enemies.find(e=>e.kind==='blob');assert(blob);assert.equal(blob.speed,5.1);assert.equal(h.runtime.spawnGrace,2);
+});
+
+test('a fresh descent cannot load an unreached stale Room 25 checkpoint',async()=>{
+  const h=gameHarness();await Promise.resolve();await Promise.resolve();h.enter(25);assert.equal(h.runtime.room,25);
+  h.act.start(true);assert.equal(h.runtime.room,1);h.act.restartCheckpoint();assert.equal(h.runtime.room,1);
 });

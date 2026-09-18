@@ -1,8 +1,9 @@
 export type ChaseType = "blob" | "remetons";
 export type ChaseState = { start: number; type: ChaseType };
-/** Additive room-speed ladder: Room 25 = 1.5x, Room 26 = 3x, Room 27 = 4.5x. */
-export function blobChaseMultiplier(room: number) {
-  return Math.max(1.5, (room - 24) * 1.5);
+/** The Blob closes the gap a little faster in each chase room and matches sprint speed in room five. */
+export function blobChaseSpeed(room: number, chase: ChaseState, sprintSpeed = 5.1) {
+  const stage = Math.min(5, Math.max(1, room - chase.start + 1));
+  return sprintSpeed * (0.72 + (stage - 1) * 0.07);
 }
 export function scheduledChase(room: number): ChaseState | null {
   const start = Math.floor(room / 25) * 25;

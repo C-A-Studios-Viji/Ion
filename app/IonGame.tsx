@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { ModelAssets, animateModel, disposeModel } from "./modelAssets";
 import { createMonster, animateMonster, MONSTER_NAMES, MONSTER_COLORS, type MonsterKind } from "./monsterModels";
-import { blobChaseMultiplier, chaseForRoom, chaseRoomRules, exitRequirements, type ChaseState } from "./encounters";
+import { blobChaseSpeed, chaseForRoom, chaseRoomRules, exitRequirements, type ChaseState } from "./encounters";
 import { gradientMaterial, smoothNormals } from "./surfaceStyle";
 import { HorrorAudio } from "./horrorAudio";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
@@ -983,7 +983,7 @@ export default function IonGame() {
       const object = createEntityModel(kind);
       object.position.set(0, 0, runtime.roomLength / 2 + 10); object.scale.setScalar(0.92 + runtime.chaseLevel * 0.035);
       runtime.roomGroup.add(object);
-      runtime.enemies.push({ object, kind, speed: chaseRoomRules(runtime.room,runtime.chaseState!).speed * blobChaseMultiplier(runtime.room), alive: true, teleportTimer: 99, phase: 0,
+      runtime.enemies.push({ object, kind, speed: blobChaseSpeed(runtime.room, runtime.chaseState!, currentSprintSpeed()), alive: true, teleportTimer: 99, phase: 0,
         wanderTarget: new THREE.Vector3(), wanderTimer: 99 });
     }
 
@@ -1209,7 +1209,9 @@ export default function IonGame() {
         && (runtime.banishedUntil.entity ?? 0) < room && Math.random() < 0.07;
       runtime.grinRoom = grinRoll ? room : -1; runtime.grinTargetRoom = runtime.grinRoom;
       runtime.grinIncoming = grinRoll; runtime.grinWarningTimer = grinRoll ? 10 : 0; runtime.grinTeleportTimer = 0;
-      runtime.spawnGrace = 2.2; runtime.roomSpawnTimer = 0.12; runtime.roomEntitySpawned = true; // Warning completion arms the single spawn.
+      const chaseStage = runtime.chaseState ? room - runtime.chaseState.start + 1 : 0;
+      runtime.spawnGrace = chaseStage === 5 ? 2 : runtime.chaseRoom ? 0.65 : 2.2;
+      runtime.roomSpawnTimer = 0.12; runtime.roomEntitySpawned = true; // Warning completion arms the single spawn.
       runtime.verticalVelocity = 0; runtime.grounded = true; runtime.cameraMode = false; runtime.player.set(0, 1.65, runtime.roomLength / 2 - 3.4); runtime.yaw = 0; runtime.pitch = 0;
       const cave = /Caves|Caverns|Tunnels|Nursery|Gallery/.test(runtime.roomName);
       const corruption = runtime.tier / 7;
@@ -1398,7 +1400,9 @@ export default function IonGame() {
       runtime.gunInfusion = null; runtime.lightInfusion = null; runtime.accessKeys = 0;
       runtime.grinRoom = -1; runtime.grinTargetRoom = -1; runtime.grinTeleportTimer = 0; runtime.grinWarningTimer = 0; runtime.grinIncoming = false; runtime.hiding = false;
       runtime.inventory = EMPTY_INVENTORY(); runtime.basdinos = 0; runtime.wardCharges = 0; runtime.speedBoostRooms = 0; runtime.banishedUntil = {};
-      runtime.checkpoint = null; runtime.dead = false; runtime.won = false; buildRoom(1);
+      runtime.checkpoint = null;
+      try { localStorage.removeItem("ion-checkpoint"); } catch { /* best effort */ }
+      runtime.dead = false; runtime.won = false; buildRoom(1);
     }
     function start(fresh = false) {
       if (!assetsReady) return;
@@ -1595,6 +1599,8 @@ export default function IonGame() {
     function restartCheckpoint() {
       runtime.dead = false; let save = runtime.checkpoint;
       if (!save) { try { const raw = localStorage.getItem("ion-checkpoint"); if (raw) save = JSON.parse(raw) as SaveData; } catch { save = null; } }
+      // Never jump forward to a stale checkpoint from an earlier descent.
+      if (save && save.room > runtime.room) save = null;
       if (save) applySave(save); else resetRun(); start(false);
     }
     function touchMoveStart(x: number, y: number, id: number) { runtime.touchMove.x = 0; runtime.touchMove.y = 0; canvas.dataset.moveStart = `${id},${x},${y}`; }
@@ -1637,6 +1643,12 @@ export default function IonGame() {
             : runtime.accessKeys > 0 ? "E  USE CRYSTAL KEY" : `LOCKED · ${runtime.objective.toUpperCase()}`; }
       }
     }
+    function currentSprintSpeed() {
+      const activeInfusions = new Set([runtime.gunInfusion, runtime.lightInfusion].filter(Boolean));
+      const infusionBoost = 1 + activeInfusions.size * 0.08 + (activeInfusions.has("citrine") ? 0.17 : 0);
+      const itemBoost = runtime.speedBoostRooms > 0 ? 1.35 : 1;
+      return 5.1 * infusionBoost * itemBoost;
+    }
     function updateMovement(dt: number) {
       if (runtime.hiding) {
         camera.position.set(runtime.player.x, 0.43, runtime.player.z); camera.rotation.order = "YXZ"; camera.rotation.set(runtime.pitch, runtime.yaw, 0);
@@ -1648,10 +1660,8 @@ export default function IonGame() {
       const sideInput = (runtime.keysDown.has("KeyD") ? 1 : 0) - (runtime.keysDown.has("KeyA") ? 1 : 0) + runtime.touchMove.x;
       const moving = Math.abs(forwardInput) + Math.abs(sideInput) > 0.08;
       const sprinting = moving && (runtime.keysDown.has("ShiftLeft") || runtime.keysDown.has("ShiftRight") || runtime.touchMove.sprint);
-      const activeInfusions = new Set([runtime.gunInfusion, runtime.lightInfusion].filter(Boolean));
-      const infusionBoost = 1 + activeInfusions.size * 0.08 + (activeInfusions.has("citrine") ? 0.17 : 0);
-      const itemBoost = runtime.speedBoostRooms > 0 ? 1.35 : 1;
-      const speed = (sprinting ? 5.1 : 3.15) * infusionBoost * itemBoost;
+      const sprintSpeed = currentSprintSpeed();
+      const speed = sprinting ? sprintSpeed : sprintSpeed * (3.15 / 5.1);
       const forward = new THREE.Vector3(-Math.sin(runtime.yaw), 0, -Math.cos(runtime.yaw));
       const right = new THREE.Vector3(Math.cos(runtime.yaw), 0, -Math.sin(runtime.yaw));
       const move = forward.multiplyScalar(forwardInput).add(right.multiplyScalar(sideInput)); if (move.lengthSq() > 1) move.normalize();
@@ -1711,6 +1721,8 @@ export default function IonGame() {
           shouldMove = !lit; enemy.speed = lit ? 0 : 3.3 + runtime.tier * 0.2; }
         let movementTarget = toPlayer;
         let movementSpeed = enemy.speed;
+        if ((enemy.kind === "blob" || enemy.kind === "remetons") && runtime.chaseState
+          && runtime.room - runtime.chaseState.start + 1 === 5) movementSpeed = currentSprintSpeed();
         if (enemy.kind === "entity") {
           enemy.wanderTimer -= dt;
           const toWander = enemy.wanderTarget.clone().sub(enemy.object.position); toWander.y = 0;
