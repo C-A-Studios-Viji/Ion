@@ -8,6 +8,8 @@ import { blobChaseSpeed, chaseForRoom, chaseRoomRules, exitRequirements, type Ch
 import { gradientMaterial, smoothNormals } from "./surfaceStyle";
 import { HorrorAudio } from "./horrorAudio";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { BADGES, awardBadges, emptyBadgeProgress, readRunSlots, writeRunSlot, rollCrawlerPack, type BadgeEvent, type BadgeProgress, type RunSlot } from "./progression";
+import { PartyLink, validPartyCode, type PartyMessage, type Pose } from "./multiplayer";
 
 type CrystalKey =
   | "malachite"
@@ -33,6 +35,9 @@ type Screen =
   | "pershub"
   | "inventory"
   | "banish"
+  | "saves"
+  | "badges"
+  | "party"
   | null;
 
 type CrystalInfo = {
@@ -81,6 +86,9 @@ type HudState = {
   basdinos: number;
   wardCharges: number;
   speedBoostRooms: number;
+  badgeCount: number;
+  partyCode: string;
+  partyConnected: boolean;
 };
 
 type Pickup = {
@@ -107,6 +115,7 @@ type Enemy = {
   phase: number;
   wanderTarget: THREE.Vector3;
   wanderTimer: number;
+  seen?: boolean;
 };
 
 type Hazard = {
@@ -178,7 +187,7 @@ type Runtime = {
   mandatoryCollected: boolean;
   objective: string;
   prompt: string;
-  nearest: { kind: "pickup" | "station" | "door"; index?: number } | null;
+  nearest: { kind: "pickup" | "station" | "door" | "teammate"; index?: number } | null;
   running: boolean;
   dead: boolean;
   won: boolean;
@@ -214,6 +223,10 @@ type Runtime = {
   clock: THREE.Clock;
   audio: AudioEngine | null;
   checkpoint: SaveData | null;
+  removedPickups: Set<number>;
+  remoteAvatar: THREE.Group | null;
+  remotePose: Pose | null;
+  networkTimer: number;
 };
 
 type SaveData = {
@@ -232,6 +245,16 @@ type SaveData = {
   wardCharges?: number;
   speedBoostRooms?: number;
   banishedUntil?: Partial<Record<EnemyKind, number>>;
+  removedPickups?: number[];
+  activatedResonators?: number[];
+  mandatoryCollected?: boolean;
+  noiseCount?: number;
+  noiseTime?: number;
+  noiseActive?: boolean;
+  haidIniActive?: boolean;
+  grinIncoming?: boolean;
+  grinWarningTimer?: number;
+  playerPosition?: [number,number,number];
 };
 
 type ActionApi = {
@@ -251,6 +274,14 @@ type ActionApi = {
   useItem: (key: ItemKey) => void;
   banish: (kind: EnemyKind) => void;
   restartCheckpoint: () => void;
+  openBadges: () => void;
+  closeBadges: () => void;
+  startNewSlot: (slot: number) => void;
+  loadSlot: (slot: number) => void;
+  saveRun: () => void;
+  hostParty: () => Promise<void>;
+  joinParty: (code: string) => Promise<void>;
+  leaveParty: () => void;
   touchMoveStart: (x: number, y: number, id: number) => void;
   touchMoveUpdate: (x: number, y: number, id: number) => void;
   touchMoveEnd: (id: number) => void;
@@ -447,7 +478,7 @@ const TUTORIAL_STEPS = [
     number: "09",
     label: "FLUORITE & PERS HUB",
     title: "The main currency cannot be found.",
-    body: "At an Infusionsmith, combine one Malachite, Amethyst, Quartz and Corrupted crystal to synthesize Fluorite. After the first chase, Room 32 contains Pers Hub: trade Fluorite for random inventory items or spend ten on a Basdino companion.",
+    body: "At an Infusionsmith, combine one Malachite, Amethyst, Quartz and Corrupted crystal to synthesize TWO Fluorite. After the first chase, Room 32 contains Pers Hub: trade Fluorite for random inventory items or spend ten on a Basdino companion.",
     desktop: "SYNTHESIZE FLUORITE · VISIT PERS AT ROOM 32",
     touch: "SYNTHESIZE FLUORITE · VISIT PERS AT ROOM 32",
   },
@@ -492,6 +523,7 @@ const INITIAL_HUD: HudState = {
   basdinos: 0,
   wardCharges: 0,
   speedBoostRooms: 0,
+  badgeCount: 0, partyCode: "", partyConnected: false,
 };
 
 class AudioEngine {
@@ -651,6 +683,14 @@ export default function IonGame() {
   const [webglUnavailable, setWebglUnavailable] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
   const [assetProgress, setAssetProgress] = useState(0);
+  const [savedRuns, setSavedRuns] = useState<(RunSlot<SaveData> | null)[]>([null,null,null]);
+  const [badgeProgress, setBadgeProgress] = useState<BadgeProgress>(emptyBadgeProgress());
+  const [partyStatus, setPartyStatus] = useState("PLAY SOLO OR CONNECT TO A FRIEND");
+  const [partyInput, setPartyInput] = useState("");
+  const activeSlotRef = useRef<number | null>(null);
+  const badgesRef = useRef<BadgeProgress>(emptyBadgeProgress());
+  const partyRef = useRef<PartyLink | null>(null);
+  const badgeReturnRef = useRef<Screen>("start");
 
   const showScreen = (value: Screen) => {
     screenRef.current = value;
@@ -658,6 +698,14 @@ export default function IonGame() {
   };
 
   useEffect(() => {
+    try {
+      setSavedRuns(readRunSlots<SaveData>(localStorage));
+      const stored=JSON.parse(localStorage.getItem("ion-badges-v1") ?? "null");
+      if (stored?.unlocked && Array.isArray(stored.unlocked)) {
+        badgesRef.current={unlocked:stored.unlocked.filter((id:unknown)=>typeof id==="string"),counts:stored.counts??{},detailCounts:stored.detailCounts??{}};
+        setBadgeProgress({...badgesRef.current});
+      }
+    } catch { /* Browsers with storage disabled still allow a session. */ }
     const canvasElement = canvasRef.current;
     if (!canvasElement) return;
     const canvas = canvasElement;
@@ -723,8 +771,101 @@ export default function IonGame() {
       wardCharges: 0, speedBoostRooms: 0, banishedUntil: {},
       lastFrame: performance.now(), hudTimer: 0, footstepTimer: 0, gunKick: 0, transition: 0, transitionDirection: 0,
       gunModel, clock: new THREE.Clock(), audio: null, checkpoint: null,
+      removedPickups: new Set(), remoteAvatar: null, remotePose: null, networkTimer: 0,
     };
     runtimeRef.current = runtime;
+    const party = new PartyLink();partyRef.current=party;
+
+    function localPose():Pose{return{x:runtime.player.x,y:runtime.player.y,z:runtime.player.z,yaw:runtime.yaw,light:runtime.flashlightOn,dead:runtime.dead,room:runtime.room};}
+    function remoteModel(){
+      const group=new THREE.Group();
+      const suit=new THREE.MeshStandardMaterial({color:0x213e65,emissive:0x092341,roughness:.4,metalness:.55});
+      const visor=new THREE.MeshStandardMaterial({color:0x4ef4e4,emissive:0x29bbdc,emissiveIntensity:1.4});
+      const body=new THREE.Mesh(new THREE.CapsuleGeometry(.29,.82,8,14),suit);body.position.y=-.72;group.add(body);
+      const helmet=new THREE.Mesh(new THREE.SphereGeometry(.27,20,14),visor);helmet.position.y=-.03;group.add(helmet);
+      const lamp=new THREE.PointLight(0x56e8ff,6,5);lamp.position.set(0,-.1,-.25);group.add(lamp);
+      group.userData.lamp=lamp;return group;
+    }
+    function updateRemoteAvatar(){
+      const pose=runtime.remotePose;
+      if(!pose || pose.room!==runtime.room)return;
+      if(!runtime.remoteAvatar){runtime.remoteAvatar=remoteModel();runtime.roomGroup.add(runtime.remoteAvatar);}
+      runtime.remoteAvatar.visible=true;
+      runtime.remoteAvatar.userData.lamp.visible=pose.light && !pose.dead;
+      runtime.remoteAvatar.position.lerp(new THREE.Vector3(pose.x,pose.y,pose.z),.33);
+      runtime.remoteAvatar.rotation.y=pose.yaw;
+      runtime.remoteAvatar.children[0].rotation.z=pose.dead?1.2:0;
+    }
+    party.onStatus=status=>{setPartyStatus(status);updateHud(true);};
+    party.onConnect=()=>{
+      badge("multiplayer");
+      if(party.role==="host")party.send({type:"hello",state:snapshot(),pose:localPose()});
+      updateHud(true);
+    };
+    party.onDisconnect=()=>{runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;updateHud(true);};
+    party.onMessage=(message:PartyMessage)=>{
+      if(message.type==="pose"){
+        if(message.pose?.room>=1 && message.pose.room<=200 && Number.isFinite(message.pose.x))runtime.remotePose=message.pose;
+        return;
+      }
+      if(message.type==="hello" && party.role==="guest"){
+        const state=message.state as SaveData;
+        if(!Number.isInteger(state?.room)||state.room<1||state.room>200)return;
+        runtime.remotePose=message.pose;runtime.dead=false;runtime.won=false;applySave(state);start(false);return;
+      }
+      if(message.type==="room" && party.role==="guest"){
+        const state=message.state as SaveData;
+        if(!Number.isInteger(state?.room)||state.room<1||state.room>200)return;
+        runtime.dead=false;runtime.transition=0;applySave(state);start(false);return;
+      }
+      if(message.type==="request-room" && party.role==="host"){
+        if(message.room===runtime.room+1 && runtime.doorUnlocked){runtime.transition=0;buildRoom(message.room);}
+        else if(message.room===runtime.room)party.send({type:"room",state:snapshot()});
+        return;
+      }
+      if(message.type==="dead"){
+        if(runtime.remotePose && runtime.remotePose.room===message.room)runtime.remotePose.dead=true;
+        notify("TEAMMATE DOWN · APPROACH AND PRESS E TO REVIVE");return;
+      }
+      if(message.type==="action"){
+        if(message.room!==runtime.room)return;
+        if(message.action==="revive"){
+          runtime.dead=false;runtime.spawnGrace=4;runtime.running=true;showScreen(null);notify("YOUR TEAMMATE REVIVED YOU");return;
+        }
+        if(message.action==="door"){
+          if(runtime.doorUnlocked){runtime.doorOpening=true;runtime.audio?.pulse("door");}return;
+        }
+        if(!Number.isInteger(message.id)||message.id===undefined||message.id<0)return;
+        if(message.action==="pickup"){
+          const index=runtime.pickups.findIndex(p=>p.object.userData.pickupId===message.id);
+          if(index>=0)collect(index,true);
+        }
+        if(message.action==="resonator"){
+          const station=runtime.stations[message.id!];if(station?.kind==="resonator")openStation("resonator",station);
+        }
+        if(message.action==="fire"){
+          const enemy=runtime.enemies[message.id!];if(enemy?.alive&&enemy.kind!=="blob"&&enemy.kind!=="remetons"&&enemy.kind!=="noise"&&enemy.kind!=="haidini")removeEnemy(enemy);
+        }
+        return;
+      }
+      if(message.type==="world"&&party.role==="guest"&&message.room===runtime.room){
+        runtime.noiseTime=Math.min(runtime.noiseTime,message.noiseTime);
+        runtime.grinIncoming=message.grinIncoming;runtime.grinWarningTimer=message.grinWarningTimer;
+        if(message.doorOpening)runtime.doorOpening=true;
+        message.enemies.forEach((state,index)=>{
+          if(!Number.isFinite(state.x)||!Number.isFinite(state.z))return;
+          let enemy:Enemy|undefined=runtime.enemies[index];
+          if(enemy && enemy.kind!==state.kind){removeEnemy(enemy);delete runtime.enemies[index];enemy=undefined;}
+          if(!enemy && state.alive && state.kind in MONSTER_NAMES){
+            const kind=state.kind as EnemyKind;const object=createEntityModel(kind);runtime.roomGroup.add(object);
+            enemy={object,kind,speed:0,alive:true,teleportTimer:0,phase:0,wanderTarget:new THREE.Vector3(),wanderTimer:0};runtime.enemies[index]=enemy;badge("encounter",kind);
+          }
+          if(enemy && !state.alive && enemy.alive)removeEnemy(enemy);
+          if(enemy?.alive)enemy.object.position.set(state.x,state.y,state.z);
+        });
+        runtime.enemies.slice(message.enemies.length).forEach(enemy=>{if(enemy?.alive)removeEnemy(enemy);});
+      }
+    };
 
     const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x10171a, roughness: 0.62, metalness: 0.28 });
     const caveMaterial = new THREE.MeshStandardMaterial({ color: 0x101817, roughness: 0.72, metalness: 0.12 });
@@ -752,12 +893,24 @@ export default function IonGame() {
         chaseLevel: runtime.chaseLevel, blobDistance, haidIniActive: runtime.haidIniActive,
         inventory: { ...runtime.inventory }, basdinos: runtime.basdinos, wardCharges: runtime.wardCharges,
         speedBoostRooms: runtime.speedBoostRooms,
+        badgeCount: badgesRef.current.unlocked.length, partyCode: partyRef.current?.code ?? "", partyConnected: Boolean(partyRef.current?.connection?.open),
         deathReason: runtime.dead ? runtime.objective : "CONTACT LOST" });
     }
 
     function notify(message: string) {
       setToast(message);
       window.setTimeout(() => setToast((current) => (current === message ? "" : current)), 2600);
+    }
+
+    function badge(event: BadgeEvent, detail?: string, value = 1) {
+      const won=awardBadges(badgesRef.current,event,detail,value);
+      if(won.length){
+        setBadgeProgress({...badgesRef.current,unlocked:[...badgesRef.current.unlocked]});
+        try{localStorage.setItem("ion-badges-v1",JSON.stringify(badgesRef.current));}catch{/* best effort */}
+        notify(`BADGE UNLOCKED · ${won[0].title.toUpperCase()}${won.length>1?` +${won.length-1}`:""}`);
+      } else {
+        try{localStorage.setItem("ion-badges-v1",JSON.stringify(badgesRef.current));}catch{/* best effort */}
+      }
     }
 
     function addMesh(geometry: THREE.BufferGeometry, material: THREE.Material, position: THREE.Vector3,
@@ -976,6 +1129,7 @@ export default function IonGame() {
       runtime.enemies.push({ object, kind, speed: kind === "entity" ? Math.min(10.5, 5.1 + runtime.room * 0.023) : kind === "blob" ? 4 : kind === "haidini" ? 0.78 + runtime.tier * 0.03 : kind === "crawler" ? 4.2 + runtime.tier * 0.24 : kind === "watcher" ? 3.3 + runtime.tier * 0.2 : 2 + runtime.tier * 0.28,
         alive: true, teleportTimer: 10, revealOnly: kind === "wraith", phase: kind === "entity" ? 0 : rand() * Math.PI * 2,
         wanderTarget: new THREE.Vector3((rand() - 0.5) * (runtime.roomWidth - 4), 0, (rand() - 0.5) * (runtime.roomLength - 5)), wanderTimer: 1.5 + rand() * 2.5 });
+      badge("encounter",kind);
     }
 
     function addBlobChase() {
@@ -985,6 +1139,7 @@ export default function IonGame() {
       runtime.roomGroup.add(object);
       runtime.enemies.push({ object, kind, speed: blobChaseSpeed(runtime.room, runtime.chaseState!, currentSprintSpeed()), alive: true, teleportTimer: 99, phase: 0,
         wanderTarget: new THREE.Vector3(), wanderTimer: 99 });
+      badge("encounter",kind);
     }
 
     function roomIdentity(room: number) {
@@ -1007,6 +1162,8 @@ export default function IonGame() {
       runtime.pickups = []; runtime.stations = []; runtime.enemies = []; runtime.hazards = []; runtime.obstacles = [];
       runtime.flickerLights = []; runtime.hiddenObjects = []; runtime.door = null; runtime.doorPanels = [];
       runtime.doorPers = null; runtime.doorRedLight = null; runtime.persActor = null; runtime.persLight = null; runtime.basdinoModels = [];
+      runtime.removedPickups.clear();
+      runtime.remoteAvatar = null;
     }
 
     function buildDoor() {
@@ -1055,6 +1212,7 @@ export default function IonGame() {
         object.add(new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.3, 0.4), glow));
       }
       object.position.copy(position); object.userData.baseY = position.y; runtime.roomGroup.add(object);
+      object.userData.pickupId = runtime.pickups.length + runtime.removedPickups.size;
       runtime.pickups.push({ object, kind, crystal, mandatory }); return object;
     }
 
@@ -1126,6 +1284,7 @@ export default function IonGame() {
       }
       const object=createEntityModel("noise");object.position.set(0,.1,-runtime.roomLength/2+4);runtime.roomGroup.add(object);
       runtime.enemies.push({object,kind:"noise",speed:0,alive:true,teleportTimer:99,phase:0,wanderTarget:new THREE.Vector3(),wanderTimer:99});
+      badge("encounter","noise");
     }
 
     function beginInfection() {
@@ -1181,17 +1340,20 @@ export default function IonGame() {
       actor.visible=t<2.4;animateMonster(actor,t*3);
     }
 
-    function buildRoom(room: number) {
+    function buildRoom(room: number, restore?: SaveData) {
+      const escapeKinds=[...new Set(runtime.enemies.filter(e=>e.alive && e.kind!=="noise").map(e=>e.kind))];
+      if(room > runtime.room) {escapeKinds.forEach(kind=>badge("escape",kind));if(runtime.chaseState && room===runtime.chaseState.start+5)badge("chase");}
       const previousRoom = runtime.room;
       clearRoom(); const rand = seeded(room * 1931 + 71); runtime.room = room;
       if (room > previousRoom && runtime.speedBoostRooms > 0) runtime.speedBoostRooms -= 1;
       runtime.tier = Math.min(7, Math.floor((room - 1) / 25)); runtime.roomName = roomIdentity(room);
-      runtime.chaseState = chaseForRoom(room,runtime.chaseState,Math.random(),(runtime.banishedUntil.remetons ?? 0)>=room);
+      runtime.chaseState = restore?.chaseState ?? chaseForRoom(room,runtime.chaseState,Math.random(),(runtime.banishedUntil.remetons ?? 0)>=room);
       runtime.chaseRoom = !!runtime.chaseState; runtime.chaseLevel = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).level : 0;
       if (runtime.chaseState) runtime.roomName = `${runtime.chaseState.type === "remetons" ? "Infected Pers" : "Blob"} Pursuit · ${room-runtime.chaseState.start+1}/5`;
       runtime.persHubActive = room === 32;
       runtime.haidIniActive = !runtime.chaseRoom && !runtime.persHubActive && room >= 30 && room < 200 && (room % 30 === 0 || rand() < 0.055 + runtime.tier * 0.006);
       if ((runtime.banishedUntil.haidini ?? 0) >= room) runtime.haidIniActive = false;
+      if(restore?.haidIniActive !== undefined)runtime.haidIniActive=restore.haidIniActive;
       if (runtime.haidIniActive) runtime.roomName = "Haid-Ini Resonance Lockdown";
       runtime.roomWidth = runtime.chaseRoom ? Math.max(10.8, 15.5 - runtime.chaseLevel * 0.42) : Math.max(11.6, 18 - runtime.tier * 0.72 + rand() * 2.2);
       runtime.roomLength = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).length : 23 + rand() * 6 + runtime.tier * 0.35;
@@ -1200,6 +1362,7 @@ export default function IonGame() {
       runtime.mandatoryCollected = !runtime.mandatoryCrystal || runtime.discovered.has(runtime.mandatoryCrystal);
       runtime.requiredResonators = runtime.chaseRoom ? 4 : runtime.haidIniActive ? 30 : !runtime.persHubActive && room > 2 && room % 4 === 0 ? Math.min(4, 2 + Math.floor(runtime.tier / 2)) : 0;
       runtime.noiseActive = !runtime.persHubActive && !runtime.haidIniActive && room < 200 && (runtime.banishedUntil.noise ?? 0) < room && (runtime.chaseRoom || room > 10 && rand() < 0.12);
+      if(restore?.noiseActive !== undefined)runtime.noiseActive=restore.noiseActive;
       runtime.noiseCount = 0; runtime.noiseTime = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).noiseSeconds : 42;
       runtime.noisePulseTimer = 1;
       runtime.activeResonators = 0;
@@ -1207,8 +1370,9 @@ export default function IonGame() {
       runtime.hiding = false;
       const grinRoll = !runtime.chaseRoom && !runtime.haidIniActive && !runtime.persHubActive && room < 200
         && (runtime.banishedUntil.entity ?? 0) < room && Math.random() < 0.07;
-      runtime.grinRoom = grinRoll ? room : -1; runtime.grinTargetRoom = runtime.grinRoom;
-      runtime.grinIncoming = grinRoll; runtime.grinWarningTimer = grinRoll ? 10 : 0; runtime.grinTeleportTimer = 0;
+      const grinActive=restore?.grinIncoming ?? grinRoll;
+      runtime.grinRoom = grinActive ? room : -1; runtime.grinTargetRoom = runtime.grinRoom;
+      runtime.grinIncoming = grinActive; runtime.grinWarningTimer = restore?.grinWarningTimer ?? (grinActive ? 10 : 0); runtime.grinTeleportTimer = 0;
       const chaseStage = runtime.chaseState ? room - runtime.chaseState.start + 1 : 0;
       runtime.spawnGrace = chaseStage === 5 ? 2 : runtime.chaseRoom ? 0.65 : 2.2;
       runtime.roomSpawnTimer = 0.12; runtime.roomEntitySpawned = true; // Warning completion arms the single spawn.
@@ -1355,9 +1519,11 @@ export default function IonGame() {
       if (room > 14 && !chase && !runtime.haidIniActive && canSpawn("sound") && rand() < 0.16 + runtime.tier * 0.05) addEnemy("sound", rand);
       if (room > 32 && !chase && !runtime.haidIniActive && canSpawn("prism") && rand() < 0.14 + runtime.tier * 0.035) addEnemy("prism", rand);
       if (room > 48 && !chase && !runtime.haidIniActive && canSpawn("mimic") && rand() < 0.13 + runtime.tier * 0.025) addEnemy("mimic", rand);
-      if (room > 18 && !chase && !runtime.haidIniActive && canSpawn("crawler") && rand() < 0.2 + runtime.tier * 0.045) addEnemy("crawler", rand);
+      if (room > 18 && !chase && !runtime.haidIniActive && canSpawn("crawler")) {
+        for(let i=rollCrawlerPack(rand,runtime.tier);i>0;i--)addEnemy("crawler",rand);
+      }
       if (room > 55 && !chase && !runtime.haidIniActive && canSpawn("watcher") && rand() < 0.15 + runtime.tier * 0.04) addEnemy("watcher", rand);
-      if (room > 105 && !chase && !runtime.haidIniActive && rand() < 0.2 + runtime.tier * 0.035) { const extra = rand() < 0.5 ? "crawler" : "watcher"; if (canSpawn(extra)) addEnemy(extra, rand); }
+      if (room > 105 && !chase && !runtime.haidIniActive && rand() < 0.2 + runtime.tier * 0.035 && canSpawn("watcher")) addEnemy("watcher",rand);
       addBasdinoCompanions();
       if (chase) runtime.objective = `CHASE ${room-runtime.chaseState!.start+1}/5 · TUNE FOUR RESONATORS`;
       else if (runtime.haidIniActive) runtime.objective = "HAID-INI · Tune resonators 0/30";
@@ -1371,19 +1537,44 @@ export default function IonGame() {
         try { localStorage.setItem("ion-checkpoint", JSON.stringify(runtime.checkpoint)); } catch { /* best effort */ }
         notify(`CHASE ${runtime.chaseLevel}/7 · THE BLOB IS BEHIND YOU`);
       }
-      refreshObjective(); updateDoorIndicator(); updateHud(true); notify(grinRoll ? "7% GRIN ROLL HIT · BREACH IN 10 SECONDS" : `ROOM ${String(room).padStart(3, "0")} · ${runtime.roomName.toUpperCase()}`);
+      if(restore){
+        runtime.removedPickups=new Set(restore.removedPickups ?? []);
+        runtime.pickups=runtime.pickups.filter(p=>{
+          if(!runtime.removedPickups.has(p.object.userData.pickupId))return true;
+          runtime.roomGroup.remove(p.object);disposeModel(p.object);return false;
+        });
+        (restore.activatedResonators ?? []).forEach(id=>{
+          const station=runtime.stations[id];if(station?.kind==="resonator"){
+            station.activated=true;
+            station.object.traverse(child=>{if(child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial)child.material.emissive?.set(0x37ffb2);});
+          }
+        });
+        runtime.activeResonators=runtime.stations.filter(s=>s.kind==="resonator"&&s.activated).length;
+        runtime.noiseCount=restore.noiseCount ?? 0;runtime.noiseTime=restore.noiseTime ?? runtime.noiseTime;
+        runtime.mandatoryCollected=restore.mandatoryCollected ?? runtime.mandatoryCollected;
+        if(restore.playerPosition?.length===3)runtime.player.set(...restore.playerPosition);
+        refreshObjective();
+      }
+      badge("room",undefined,Math.max(0,room-(badgesRef.current.counts.room??0)));
+      refreshObjective(); updateDoorIndicator(); updateHud(true); notify(grinActive ? "7% GRIN ROLL HIT · BREACH IN 10 SECONDS" : `ROOM ${String(room).padStart(3, "0")} · ${runtime.roomName.toUpperCase()}`);
       if (room === 200) {
         if (runtime.discovered.size === CRYSTAL_KEYS.length) {
           runtime.won = true; runtime.running = false; showScreen("win"); if (document.pointerLockElement) document.exitPointerLock();
         } else { runtime.doorUnlocked = false; runtime.objective = `Extraction denied · ${runtime.discovered.size}/7 infusions`; }
       }
+      if(!restore && activeSlotRef.current !== null) saveRun(false);
+      if(partyRef.current?.role==="host" && partyRef.current.connection?.open)partyRef.current.send({type:"room",state:snapshot()});
     }
 
     function snapshot(): SaveData {
       return { chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
         discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion, lightInfusion: runtime.lightInfusion,
         accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
-        wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil } };
+        wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil },
+        removedPickups:[...runtime.removedPickups], activatedResonators:runtime.stations.flatMap((s,i)=>s.kind==="resonator"&&s.activated?[i]:[]),
+        mandatoryCollected:runtime.mandatoryCollected,noiseCount:runtime.noiseCount,noiseTime:runtime.noiseTime,
+        noiseActive:runtime.noiseActive,haidIniActive:runtime.haidIniActive,grinIncoming:runtime.grinIncoming,
+        grinWarningTimer:runtime.grinWarningTimer,playerPosition:runtime.player.toArray() as [number,number,number] };
     }
     function applySave(save: SaveData) {
       runtime.chaseState = save.chaseState ?? null;
@@ -1392,7 +1583,7 @@ export default function IonGame() {
       runtime.accessKeys = save.accessKeys;
       runtime.maxAmmo = save.maxAmmo; runtime.inventory = save.inventory ? { ...save.inventory } : EMPTY_INVENTORY();
       runtime.basdinos = save.basdinos ?? 0; runtime.wardCharges = save.wardCharges ?? 0; runtime.speedBoostRooms = save.speedBoostRooms ?? 0;
-      runtime.banishedUntil = { ...(save.banishedUntil ?? {}) }; runtime.checkpoint = save; buildRoom(save.room);
+      runtime.banishedUntil = { ...(save.banishedUntil ?? {}) }; runtime.checkpoint = save; buildRoom(save.room,save);
     }
     function resetRun() {
       runtime.chaseState = null;
@@ -1404,10 +1595,45 @@ export default function IonGame() {
       try { localStorage.removeItem("ion-checkpoint"); } catch { /* best effort */ }
       runtime.dead = false; runtime.won = false; buildRoom(1);
     }
+    function saveRun(manual = true) {
+      if(runtime.dead || runtime.won || activeSlotRef.current===null)return;
+      try {
+        setSavedRuns(writeRunSlot(localStorage,activeSlotRef.current,snapshot()));
+        if(manual){badge("save");notify(`RUN SAVED · SLOT ${activeSlotRef.current+1} · ROOM ${runtime.room}`);}
+      } catch {if(manual)notify("SAVE FAILED · BROWSER STORAGE UNAVAILABLE");}
+    }
+    async function hostParty(){
+      try{
+        if(!assetsReady){setPartyStatus("WAIT FOR THE FACILITY TO LOAD");return;}
+        const inGame=runtime.running||screenRef.current==="pause"||screenRef.current==="inventory";
+        if(!inGame){start(true);runtime.running=false;}
+        showScreen("party");const code=await party.host();setPartyInput(code);updateHud(true);
+      }catch(error){setPartyStatus(error instanceof Error?error.message:"Could not host room");party.close();}
+    }
+    async function joinParty(code:string){
+      if(!validPartyCode(code)){setPartyStatus("Enter exactly five digits");return;}
+      try{showScreen("party");setPartyStatus("CONNECTING TO HOST…");await party.join(code);setPartyStatus("CONNECTED · LOADING THE HOST'S ROOM");}
+      catch(error){setPartyStatus(error instanceof Error?error.message:"Could not join room");party.close();}
+    }
+    function leaveParty(){party.close();runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;setPartyStatus("LEFT THE MULTIPLAYER ROOM");updateHud(true);}
+    function openBadges(){badgeReturnRef.current=screenRef.current;runtime.running=false;showScreen("badges");if(document.pointerLockElement)document.exitPointerLock();}
+    function closeBadges(){if(badgeReturnRef.current===null)resume();else showScreen(badgeReturnRef.current);}
+    function startNewSlot(slot:number){
+      if(slot<0||slot>2)return;activeSlotRef.current=slot;
+      partyRef.current?.close();setPartyStatus("PLAY SOLO OR CONNECT TO A FRIEND");
+      setTutorialStep(0);showScreen("tutorial");
+    }
+    function loadSlot(slot:number){
+      const save=readRunSlots<SaveData>(localStorage)[slot]?.state;
+      if(!save){notify("NO SAVED RUN IN THIS SLOT");return;}
+      partyRef.current?.close();activeSlotRef.current=slot;
+      runtime.dead=false;runtime.won=false;applySave(save);start(false);
+    }
     function start(fresh = false) {
       if (!assetsReady) return;
       if (fresh) resetRun(); if (!runtime.audio) runtime.audio = new AudioEngine(); runtime.audio.resume();
       runtime.running = true; runtime.dead = false; showScreen(null);
+      if(fresh && activeSlotRef.current!==null)saveRun(false);
       if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock(); updateHud(true);
     }
     function resume() {
@@ -1427,6 +1653,7 @@ export default function IonGame() {
         runtime.audio?.pulse("teleport"); notify("BASDINO SACRIFICED ITSELF · BONUS LIFE USED"); updateHud(true); return;
       }
       runtime.dead = true; runtime.running = false; runtime.transition=0; runtime.objective = reason;
+      badge("death");partyRef.current?.send({type:"dead",room:runtime.room});
       beginJumpscare(kind); runtime.audio?.jumpscare(kind); document.body.dataset.jumpscare = "true"; showScreen("dead");
       window.setTimeout(() => { delete document.body.dataset.jumpscare; }, 1250);
       if (document.pointerLockElement) document.exitPointerLock(); updateHud(true);
@@ -1449,11 +1676,12 @@ export default function IonGame() {
           else if (enemy.kind === "noise") { notify("NOISE HAS NO PHYSICAL BODY · COLLECT FIVE SPECIMENS"); }
           else if (enemy.kind === "haidini") { notify("HAID-INI IGNORES GUNFIRE · TUNE ALL 30 RESONATORS"); }
           else if (enemy.kind === "entity") {
+            partyRef.current?.send({type:"action",room:runtime.room,action:"fire",id:runtime.enemies.indexOf(enemy)});
             removeEnemy(enemy); runtime.grinRoom = -1; runtime.grinTargetRoom = -1;
             runtime.grinTeleportTimer = 0; runtime.grinWarningTimer = 0; runtime.grinIncoming = false; runtime.roomEntitySpawned = true;
             runtime.audio?.pulse("teleport"); notify("GRIN DISPERSED · NO SIGNAL");
           }
-          else { removeEnemy(enemy); notify(runtime.gunInfusion === "obsidian" ? "OBSIDIAN IMPACT · TARGET SHATTERED" : "HOSTILE DISPERSED"); } }
+          else { partyRef.current?.send({type:"action",room:runtime.room,action:"fire",id:runtime.enemies.indexOf(enemy)});removeEnemy(enemy);badge("kill",enemy.kind); notify(runtime.gunInfusion === "obsidian" ? "OBSIDIAN IMPACT · TARGET SHATTERED" : "HOSTILE DISPERSED"); } }
       }
       updateHud(true);
     }
@@ -1466,15 +1694,20 @@ export default function IonGame() {
       if (!runtime.running || runtime.cameraMode || runtime.hiding || !runtime.grounded) return;
       runtime.verticalVelocity = 6.7; runtime.grounded = false; runtime.audio?.pulse("step");
     }
-    function collect(index: number) {
+    function collect(index: number, fromPeer=false) {
       const pickup = runtime.pickups[index]; if (!pickup || !pickup.object.parent) return;
+      const pickupId=pickup.object.userData.pickupId as number;
+      if(!fromPeer)partyRef.current?.send({type:"action",room:runtime.room,action:"pickup",id:pickupId});
+      runtime.removedPickups.add(pickupId);
       runtime.roomGroup.remove(pickup.object); disposeModel(pickup.object); runtime.pickups.splice(index, 1); runtime.audio?.pulse("pickup");
       if (pickup.kind === "specimen") {
+        badge("specimen");
         runtime.noiseCount += 1;
         runtime.enemies.filter(e=>e.kind==="blob"||e.kind==="remetons").forEach(e=>e.stunTimer=Math.max(e.stunTimer??0,.65));
         if (runtime.noiseCount >= 5) {runtime.noiseActive=false;runtime.enemies.filter(e=>e.kind==="noise"&&e.alive).forEach(removeEnemy);notify("5/5 SPECIMENS · NOISE SILENCED");}
         else notify(`NOISE SPECIMEN ${runtime.noiseCount}/5`);
       } else if (pickup.kind === "crystal" && pickup.crystal) {
+        badge("crystal",pickup.crystal);
         runtime.crystals[pickup.crystal] += 1; const first = !runtime.discovered.has(pickup.crystal); runtime.discovered.add(pickup.crystal);
         if (pickup.mandatory || pickup.crystal === runtime.mandatoryCrystal) runtime.mandatoryCollected = true;
         notify(first ? `${CRYSTALS[pickup.crystal].label.toUpperCase()} DISCOVERED · INFUSION UNLOCKED` : `${CRYSTALS[pickup.crystal].label.toUpperCase()} +1`);
@@ -1511,6 +1744,7 @@ export default function IonGame() {
       }
       if (kind === "resonator") {
         if (station && !station.activated) { station.activated = true; runtime.activeResonators += 1;
+          badge("resonator");
           if(runtime.chaseRoom)runtime.enemies.filter(e=>e.kind==="blob"||e.kind==="remetons").forEach(e=>e.stunTimer=1.8);
           station.object.traverse((child) => { if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) child.material.emissive?.set(0x37ffb2); });
           runtime.audio?.pulse("pickup");
@@ -1527,12 +1761,13 @@ export default function IonGame() {
       if (runtime.infectionTime >= 0) return;
       if (!runtime.running || runtime.cameraMode || screenRef.current) return; const nearest = runtime.nearest; if (!nearest) return;
       if (nearest.kind === "pickup" && nearest.index !== undefined) collect(nearest.index);
-      if (nearest.kind === "station" && nearest.index !== undefined) { const station = runtime.stations[nearest.index]; if (station) openStation(station.kind, station); }
+      if (nearest.kind === "station" && nearest.index !== undefined) { const station = runtime.stations[nearest.index]; if (station){if(station.kind==="resonator"&&!station.activated)partyRef.current?.send({type:"action",room:runtime.room,action:"resonator",id:nearest.index});openStation(station.kind, station);} }
+      if(nearest.kind==="teammate" && runtime.remotePose?.dead){partyRef.current?.send({type:"action",room:runtime.room,action:"revive"});runtime.remotePose.dead=false;badge("revive");notify("TEAMMATE REVIVED");}
       if (nearest.kind === "door") {
         if (runtime.noiseActive || runtime.chaseRoom && !runtime.doorUnlocked) {notify("RESONANCE LOCK · COMPLETE SPECIMENS AND RESONATORS");return;}
         if (runtime.haidIniActive && runtime.activeResonators < 30) { runtime.audio?.pulse("error"); notify("HAID-INI LOCKDOWN · CRYSTAL KEYS REJECTED"); return; }
         if (!runtime.doorUnlocked && runtime.accessKeys > 0) { runtime.accessKeys -= 1; runtime.doorUnlocked = true; updateDoorIndicator(); notify("CRYSTAL KEY ACCEPTED"); }
-        if (runtime.doorUnlocked) { runtime.doorOpening = true; runtime.audio?.pulse("door"); runtime.objective = "Proceed to the next room"; }
+        if (runtime.doorUnlocked) { runtime.doorOpening = true;partyRef.current?.send({type:"action",room:runtime.room,action:"door"}); runtime.audio?.pulse("door"); runtime.objective = "Proceed to the next room"; }
         else { runtime.audio?.pulse("error"); notify(runtime.objective.toUpperCase()); }
       }
     }
@@ -1546,31 +1781,34 @@ export default function IonGame() {
         capacity: { cost: { obsidian: 1, citrine: 1 }, make: () => { runtime.maxAmmo = Math.min(16, runtime.maxAmmo + 2); runtime.ammo += 2; }, label: "CHAMBER UPGRADE" },
       };
       const recipe = recipes[id]; if (!recipe || !hasCost(recipe.cost)) { runtime.audio?.pulse("error"); notify("INSUFFICIENT CRYSTAL MASS"); return; }
-      spend(recipe.cost); recipe.make(); runtime.audio?.pulse("pickup"); notify(`${recipe.label} CRAFTED`); updateHud(true);
+      spend(recipe.cost); recipe.make();badge("craft"); runtime.audio?.pulse("pickup"); notify(`${recipe.label} CRAFTED`); updateHud(true);
     }
     function infuse(key: CrystalKey) {
       if (!runtime.discovered.has(key)) { notify("INFUSION SCHEMA NOT DISCOVERED"); return; }
       const target = CRYSTALS[key].target; if (target === "GUN" || target === "BOTH") runtime.gunInfusion = key;
       if (target === "LIGHT" || target === "SUIT" || target === "BOTH") runtime.lightInfusion = key;
       if (key === "fluorite") runtime.hiddenObjects.forEach((object) => { object.visible = true; });
+      badge("infuse");
       notify(`${CRYSTALS[key].label.toUpperCase()} ${target} INFUSION ACTIVE`); runtime.audio?.pulse("pickup"); updateHud(true);
     }
     function synthesizeFluorite() {
       const cost = { malachite: 1, amethyst: 1, quartz: 1, corrupted: 1 } satisfies Partial<Record<CrystalKey, number>>;
       if (!hasCost(cost)) { runtime.audio?.pulse("error"); notify("NEED 1 MAL · 1 AME · 1 QTZ · 1 ERR"); return; }
-      spend(cost); runtime.crystals.fluorite += 1; runtime.discovered.add("fluorite"); runtime.audio?.pulse("pickup");
-      notify("FLUORITE SYNTHESIZED · MAIN CURRENCY +1"); updateHud(true);
+      spend(cost); runtime.crystals.fluorite += 2; runtime.discovered.add("fluorite");badge("synthesize"); runtime.audio?.pulse("pickup");
+      notify("FLUORITE SYNTHESIZED · MAIN CURRENCY +2"); updateHud(true);
     }
     function buyPersItem() {
       if (runtime.crystals.fluorite < 1) { runtime.audio?.pulse("error"); notify("PERS REQUIRES 1 FLUORITE"); return; }
       runtime.crystals.fluorite -= 1;
       const pool: ItemKey[] = ["soul", "royalBattery", "obsidianMagazine", "citrineRush", "persKey", "crystalWard"];
       const item = pool[Math.floor(Math.random() * pool.length)]; runtime.inventory[item] += 1;
+      badge("pers_trade");badge("pers_item",item);
       runtime.audio?.pulse("pickup"); notify(`PERS GRANTED · ${ITEMS[item].label.toUpperCase()}`); updateHud(true);
     }
     function buyBasdino() {
       if (runtime.crystals.fluorite < 10) { runtime.audio?.pulse("error"); notify("BASDINO BOND COSTS 10 FLUORITE"); return; }
       runtime.crystals.fluorite -= 10; runtime.basdinos += 1; addBasdinoCompanions();
+      badge("basdino");
       runtime.audio?.pulse("pickup"); notify("BASDINO BONDED · ONE SACRIFICIAL BONUS LIFE"); updateHud(true);
     }
     function openInventory() { if(runtime.infectionTime>=0)return; runtime.running = false; showScreen("inventory"); if (document.pointerLockElement) document.exitPointerLock(); }
@@ -1588,6 +1826,7 @@ export default function IonGame() {
     function banish(kind: EnemyKind) {
       if (runtime.inventory.soul <= 0) { showScreen("inventory"); return; }
       runtime.inventory.soul -= 1; runtime.banishedUntil[kind] = runtime.room + 15;
+      badge("banish");
       runtime.enemies.filter((enemy) => enemy.kind === kind && enemy.alive).forEach(removeEnemy);
       if (kind === "entity") { runtime.grinRoom = -1; runtime.grinIncoming = false; runtime.grinWarningTimer = 0; runtime.roomEntitySpawned = true; }
       if (kind === "haidini") { runtime.haidIniActive = false; runtime.requiredResonators = 0; runtime.activeResonators = 0; refreshObjective(); }
@@ -1619,6 +1858,7 @@ export default function IonGame() {
 
     actionRef.current = { start, resume, interact, fire, toggleLight, jump, close, craft, infuse, synthesizeFluorite,
       buyPersItem, buyBasdino, openInventory, useItem, banish, restartCheckpoint,
+      startNewSlot,loadSlot,saveRun:()=>saveRun(true),hostParty,joinParty,leaveParty,openBadges,closeBadges,
       touchMoveStart, touchMoveUpdate, touchMoveEnd, touchLookStart, touchLookUpdate, touchLookEnd,
       setSprint: (value) => { runtime.touchMove.sprint = value; } };
 
@@ -1641,6 +1881,10 @@ export default function IonGame() {
         if (distance < bestDistance) { runtime.nearest = { kind: "door" };
           runtime.prompt = runtime.doorUnlocked ? runtime.doorOpening ? "PRESSURE DOOR OPENING" : "E  OPEN PRESSURE DOOR"
             : runtime.accessKeys > 0 ? "E  USE CRYSTAL KEY" : `LOCKED · ${runtime.objective.toUpperCase()}`; }
+      }
+      if(runtime.remotePose?.dead && runtime.remotePose.room===runtime.room){
+        const distance=new THREE.Vector3(runtime.remotePose.x,runtime.remotePose.y,runtime.remotePose.z).distanceTo(runtime.player);
+        if(distance<bestDistance){runtime.nearest={kind:"teammate"};runtime.prompt="E  REVIVE TEAMMATE";}
       }
     }
     function currentSprintSpeed() {
@@ -1702,13 +1946,19 @@ export default function IonGame() {
         if (!enemy.alive) return; enemy.phase += dt;
         if(enemy.kind==="noise"){animateMonster(enemy.object,enemy.phase,false);enemy.object.rotation.y=Math.sin(enemy.phase)*.18;return;}
         enemy.stunTimer=Math.max(0,(enemy.stunTimer??0)-dt);
-        if (enemy.kind === "entity" && enemy.phase >= 15) {
+        if (enemy.kind === "entity" && enemy.phase >= 15 && party.role!=="guest") {
           removeEnemy(enemy); runtime.grinRoom = -1; runtime.grinTargetRoom = -1;
           runtime.grinIncoming = false; runtime.grinWarningTimer = 0; runtime.roomEntitySpawned = true;
           notify("GRIN DEPARTED · YOU CAN LEAVE THE TRAPDOOR"); updateHud(true);
           return;
         }
-        const toPlayer = runtime.player.clone().sub(enemy.object.position); toPlayer.y = 0; const distance = toPlayer.length();
+        const toPlayer = runtime.player.clone().sub(enemy.object.position);toPlayer.y=0;
+        const localDistance=toPlayer.length();
+        if(party.role==="host" && runtime.remotePose?.room===runtime.room && !runtime.remotePose.dead){
+          const teammate=new THREE.Vector3(runtime.remotePose.x,runtime.remotePose.y,runtime.remotePose.z).sub(enemy.object.position);teammate.y=0;
+          if(teammate.length()<localDistance)toPlayer.copy(teammate);
+        }
+        const distance=toPlayer.length();
         if (enemy.kind === "entity" || enemy.kind === "blob" || enemy.kind === "haidini") mainDistance = Math.min(mainDistance, distance);
         if (runtime.spawnGrace > 0) return;
         let shouldMove = true;
@@ -1734,7 +1984,7 @@ export default function IonGame() {
           movementTarget = hunting ? toPlayer : enemy.wanderTarget.clone().sub(enemy.object.position);
           movementTarget.y = 0; movementSpeed = hunting ? enemy.speed : 1.25 + runtime.tier * 0.13;
         }
-        shouldMove=shouldMove && enemy.stunTimer<=0;
+        shouldMove=shouldMove && enemy.stunTimer<=0 && party.role!=="guest";
         if (shouldMove && movementTarget.length() > 0.02) {
           enemy.object.position.add(movementTarget.normalize().multiplyScalar(movementSpeed * dt));
           const lookAt = enemy.kind === "entity" && movementTarget !== toPlayer ? enemy.wanderTarget : runtime.player;
@@ -1757,7 +2007,7 @@ export default function IonGame() {
         else if (enemy.kind === "crawler") { enemy.object.position.y = Math.max(0, Math.sin(enemy.phase * 10) * 0.025); enemy.object.children.forEach((child) => { if (child.userData.limb !== undefined) child.rotation.x = Math.sin(enemy.phase * 13 + child.userData.limb) * 0.42; }); }
         else if (enemy.kind === "sound") enemy.object.position.y = Math.max(0, Math.sin(enemy.phase * 8) * 0.04);
         const lethalDistance = enemy.kind === "blob" || enemy.kind === "remetons" ? 2.05 : enemy.kind === "haidini" ? 1.08 : enemy.kind === "entity" ? 0.92 : enemy.kind === "wraith" ? 0.7 : 0.62;
-        if (distance < lethalDistance && (!runtime.hiding || enemy.kind === "haidini")) kill(enemy.kind === "remetons" ? "INFECTED PERS CONSUMED YOU" : enemy.kind === "blob" ? "THE BLOB CONSUMED YOU" : enemy.kind === "haidini" ? "HAID-INI ENTERED THE TRAPDOOR" : enemy.kind === "entity" ? "THE ENTITY MADE CONTACT" : `${enemy.kind.toUpperCase()} ENTITY BREACHED YOUR SUIT`,enemy.kind);
+        if (localDistance < lethalDistance && (!runtime.hiding || enemy.kind === "haidini")) kill(enemy.kind === "remetons" ? "INFECTED PERS CONSUMED YOU" : enemy.kind === "blob" ? "THE BLOB CONSUMED YOU" : enemy.kind === "haidini" ? "HAID-INI ENTERED THE TRAPDOOR" : enemy.kind === "entity" ? "THE ENTITY MADE CONTACT" : `${enemy.kind.toUpperCase()} ENTITY BREACHED YOUR SUIT`,enemy.kind);
       });
       const main = runtime.enemies.find((enemy) => (enemy.kind === "entity" || enemy.kind === "blob" || enemy.kind === "haidini") && enemy.alive);
       runtime.audio?.setEntity(main?.object.position ?? new THREE.Vector3(), mainDistance, Boolean(main));
@@ -1772,7 +2022,7 @@ export default function IonGame() {
       if (runtime.chaseRoom || runtime.haidIniActive || runtime.persHubActive) {
         runtime.enemies.filter((enemy) => enemy.kind === "entity" && enemy.alive).forEach(removeEnemy);
         runtime.grinIncoming = false; runtime.grinWarningTimer = 0; runtime.roomEntitySpawned = true;
-      } else if (runtime.room < 200 && runtime.grinIncoming) {
+      } else if (runtime.room < 200 && runtime.grinIncoming && party.role!=="guest") {
         runtime.grinWarningTimer = Math.max(0, runtime.grinWarningTimer - dt);
         if (runtime.grinWarningTimer <= 0) {
           runtime.grinIncoming = false; runtime.grinRoom = runtime.room; runtime.roomEntitySpawned = false; runtime.roomSpawnTimer = 0.12; runtime.grinTeleportTimer = 0;
@@ -1780,7 +2030,7 @@ export default function IonGame() {
           document.body.dataset.glitch = "true"; window.setTimeout(() => { delete document.body.dataset.glitch; }, 300);
         }
       }
-      if (runtime.room !== 200 && !runtime.chaseRoom) {
+      if (party.role!=="guest" && runtime.room !== 200 && !runtime.chaseRoom) {
         if (!runtime.roomEntitySpawned && !runtime.grinIncoming) {
           runtime.roomSpawnTimer -= dt;
           if (runtime.roomSpawnTimer <= 0) {
@@ -1882,13 +2132,22 @@ export default function IonGame() {
     function animate(now: number) {
       if (disposed) return;
       const dt = Math.min(0.05, (now - runtime.lastFrame) / 1000 || 0.016); runtime.lastFrame = now; runtime.hudTimer += dt;
-      if (runtime.transition > 0 && runtime.running && !runtime.dead) { runtime.transition -= dt * 1.65; if (runtime.transition <= 0) { const nextRoom = runtime.room + 1; runtime.transitionDirection = 0; buildRoom(nextRoom); } }
+      if (runtime.transition > 0 && runtime.running && !runtime.dead) { runtime.transition -= dt * 1.65; if (runtime.transition <= 0) { const nextRoom = runtime.room + 1; runtime.transitionDirection = 0; if(party.role==="guest")party.send({type:"request-room",room:nextRoom});else buildRoom(nextRoom); } }
       if (runtime.running && !runtime.dead && !runtime.won) {
         if(runtime.infectionTime>=0){updateInfection(dt);renderer.render(scene,camera);animationFrame=requestAnimationFrame(animate);return;}
         if (runtime.cameraMode) renderCameraMode(); else { runtime.gunModel.visible = true; runtime.flashlight.visible = runtime.flashlightOn; runtime.luxuryLight.visible = runtime.flashlightOn; updateMovement(dt); }
         updateWorld(dt); updateEnemies(dt); updateHud();
       } else if (!runtime.cameraMode) { camera.position.copy(runtime.player); camera.rotation.order = "YXZ"; camera.rotation.set(runtime.pitch, runtime.yaw, 0); }
       if(runtime.dead)updateJumpscare(dt);
+      if(party.connection?.open){
+        runtime.networkTimer+=dt;
+        if(runtime.networkTimer>=.12){
+          runtime.networkTimer=0;party.send({type:"pose",pose:localPose()});
+          if(party.role==="host")party.send({type:"world",room:runtime.room,noiseTime:runtime.noiseTime,grinIncoming:runtime.grinIncoming,grinWarningTimer:runtime.grinWarningTimer,doorOpening:runtime.doorOpening,
+            enemies:runtime.enemies.map(enemy=>({kind:enemy.kind,alive:enemy.alive,x:enemy.object.position.x,y:enemy.object.position.y,z:enemy.object.position.z}))});
+        }
+      }
+      updateRemoteAvatar();
       renderer.render(scene, camera); animationFrame = requestAnimationFrame(animate);
     }
     function onResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6)); renderer.setSize(window.innerWidth, window.innerHeight); }
@@ -1913,7 +2172,7 @@ export default function IonGame() {
       buildRoom(1); assetsReady = true; setAssetProgress(100);
     });
     return () => {
-      disposed = true; cancelAnimationFrame(animationFrame); clearRoom(); disposeModel(gunModel); assets.dispose();
+      disposed = true;party.close();partyRef.current=null; cancelAnimationFrame(animationFrame); clearRoom(); disposeModel(gunModel); assets.dispose();
       window.removeEventListener("resize", onResize); window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("mousemove", onMouseMove); window.removeEventListener("mousedown", onMouseDown); document.removeEventListener("pointerlockchange", onPointerLock);
       renderer.dispose(); runtime.audio?.context.close().catch(() => undefined); runtimeRef.current = null;
@@ -1953,6 +2212,8 @@ export default function IonGame() {
           </div>
         </section>
         <button className="inventory-toggle" onClick={() => actionRef.current?.openInventory()}>INVENTORY <b>{inventoryCount}</b></button>
+        <button className="badge-toggle" onClick={() => actionRef.current?.openBadges()}>BADGES <b>{hud.badgeCount}/100</b></button>
+        {hud.partyConnected&&<div className="party-indicator">CO-OP · {hud.partyCode} · 2/2</div>}
         <section className="hud crystal-rack" aria-label="Collected crystals">
           {CRYSTAL_KEYS.map((key) => <div className={hud.discovered.includes(key) ? "found" : "unknown"} key={key}><i style={{ background: CRYSTALS[key].css }} /><span>{CRYSTALS[key].short}</span><b>{hud.crystals[key]}</b></div>)}
         </section>
@@ -1965,7 +2226,9 @@ export default function IonGame() {
         <div className="title-mark"><span>UNDERGROUND RESEARCH COMPLEX · SIGNAL 07</span><h1>I<span>O</span>N</h1><p>Crystal light is beautiful. It is not safe.</p></div>
         <div className="mission-brief"><p>Reach <strong>Room 200</strong>. Recover every infusion. Survive contact.</p><div className="rules-grid">
           <span><b>7% GRIN ROLL</b> gives 10 seconds to hide</span><span><b>FLUORITE</b> is synthesized currency for Pers</span><span><b>ROOM 25×</b> starts a Blob chase · Hub at 32</span></div></div>
-        <button className="primary-button" onClick={() => { setTutorialStep(0); showScreen("tutorial"); }}>START TUTORIAL</button>
+        <button className="primary-button" onClick={() => showScreen("saves")}>PLAY · SAVED RUNS</button>
+        <button className="text-button" onClick={() => showScreen("party")}>PLAY WITH A FRIEND</button>
+        <button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/100</button>
         <div className="controls-copy">{touchCapable ? "LEFT PAD MOVE · RIGHT SIDE LOOK · USE THE ACTION BUTTONS" : "WASD MOVE · MOUSE LOOK · SPACE JUMP · CLICK FIRE · E INTERACT · F LIGHT · SHIFT RUN"}</div>
         <small className={`headphones ${webglUnavailable ? "danger" : ""}`}>{webglUnavailable ? "ION REQUIRES WEBGL 2 · OPEN ON A DEVICE WITH 3D GRAPHICS ENABLED" : assetProgress < 100 ? `PREPARING FACILITY · ${assetProgress}%` : "HEADPHONES RECOMMENDED · ONE-TOUCH DEATH · CHECKPOINTS EVERY 25 ROOMS"}</small>
       </section>}
@@ -1985,8 +2248,13 @@ export default function IonGame() {
           </footer>
         </div>
       </section>}
-      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={() => actionRef.current?.start(true)}>RESTART FROM ROOM 001</button></section>}
-      {screen === "dead" && <section className="death-screen creature-death overlay-panel compact-panel" data-scare={hud.deathKind} style={{"--scare-color":`#${MONSTER_COLORS[hud.deathKind].toString(16).padStart(6,"0")}`} as React.CSSProperties}><div className="scare-distortion" aria-hidden="true" /><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>{MONSTER_NAMES[hud.deathKind]}</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div><button className="primary-button danger-button" onClick={() => actionRef.current?.restartCheckpoint()}>RETURN TO CHECKPOINT</button><button className="text-button" onClick={() => actionRef.current?.start(true)}>NEW DESCENT</button></div></section>}
+      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyCode||"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/100</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
+      {screen === "dead" && <section className="death-screen creature-death overlay-panel compact-panel" data-scare={hud.deathKind} style={{"--scare-color":`#${MONSTER_COLORS[hud.deathKind].toString(16).padStart(6,"0")}`} as React.CSSProperties}><div className="scare-distortion" aria-hidden="true" /><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>{MONSTER_NAMES[hud.deathKind]}</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div>{hud.partyConnected&&<p>YOUR TEAMMATE CAN REVIVE YOU NEARBY</p>}<button className="primary-button danger-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.restartCheckpoint();}}>RETURN TO CHECKPOINT SOLO</button><button className="text-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.start(true);}}>NEW DESCENT</button></div></section>}
+      {screen === "saves" && <MenuShell title="SAVED RUNS" subtitle="Three independent local slots · rooms save automatically when entered" onClose={() => showScreen("start")}><div className="save-grid">
+        {savedRuns.map((slot,index)=><article className="save-card" key={index}><small>SLOT {index+1}</small><strong>{slot?`ROOM ${String(slot.state.room).padStart(3,"0")}`:"EMPTY SLOT"}</strong><p>{slot?`Saved ${new Date(slot.savedAt).toLocaleString()} · ${slot.state.discovered?.length??0}/7 minerals`:"Start a new descent and save automatically."}</p>{slot&&<button onClick={()=>actionRef.current?.loadSlot(index)}>CONTINUE RUN</button>}<button className="secondary" onClick={()=>actionRef.current?.startNewSlot(index)}>{slot?"NEW RUN IN THIS SLOT":"START NEW RUN"}</button></article>)}
+      </div></MenuShell>}
+      {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle="Two players · real-time WebRTC · five-digit room code" onClose={() => {if(runtimeRef.current?.room===1&&!partyRef.current?.code)showScreen("start");else showScreen("pause");}}><div className="party-panel"><p>{partyStatus}</p>{hud.partyCode&&<div className="party-code">{hud.partyCode}</div>}<button onClick={() => void actionRef.current?.hostParty()} disabled={Boolean(hud.partyCode)}>HOST A ROOM</button><label htmlFor="ion-party-code">JOIN A FRIEND</label><div className="party-join"><input id="ion-party-code" inputMode="numeric" maxLength={5} pattern="[0-9]{5}" value={partyInput} onChange={event=>setPartyInput(event.target.value.replace(/\D/g,"").slice(0,5))} placeholder="5-digit code" /><button disabled={!validPartyCode(partyInput)} onClick={()=>void actionRef.current?.joinParty(partyInput)}>JOIN ROOM</button></div><p className="party-note">The host keeps the room open. Move together, collect and tune shared objectives, and revive a fallen teammate with E.</p>{hud.partyCode&&<button className="secondary" onClick={()=>{actionRef.current?.leaveParty();showScreen("pause");}}>LEAVE PARTY</button>}{hud.partyCode&&<button onClick={()=>actionRef.current?.resume()}>RETURN TO GAME</button>}</div></MenuShell>}
+      {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/100 unlocked · progress persists across runs`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-grid">{BADGES.map(b=><article key={b.id} className={badgeProgress.unlocked.includes(b.id)?"earned":"locked"}><span>{badgeProgress.unlocked.includes(b.id)?"★ EARNED":"◇ LOCKED"}</span><strong>{b.title}</strong><p>{b.description}</p></article>)}</div></MenuShell>}
       {screen === "win" && <section className="win-screen overlay-panel"><span className="eyebrow">EXTRACTION ROOM · SIGNAL RESTORED</span><h2>YOU REACHED<br /><strong>ROOM 200</strong></h2><p>Every infusion is stable. The blast doors open. Something below them keeps smiling.</p><div className="completion-ring" style={{ "--completion": `${discoveredPercent}%` } as React.CSSProperties}><span>7 / 7</span><small>INFUSIONS</small></div><button className="primary-button" onClick={() => actionRef.current?.start(true)}>DESCEND AGAIN</button></section>}
       {screen === "crafter" && <MenuShell title="CRYSTAL CRAFTER" subtitle="Convert finite specimens into survival equipment" onClose={() => actionRef.current?.close()}><div className="recipe-grid">
         <Recipe name="Toxic rounds ×4" cost="1 MAL" note="Restores rifle ammunition" onClick={() => actionRef.current?.craft("ammo")} />
@@ -1995,7 +2263,7 @@ export default function IonGame() {
         <Recipe name="Chamber upgrade" cost="1 OBS · 1 CIT" note="Permanent +2 maximum ammunition" onClick={() => actionRef.current?.craft("capacity")} />
       </div></MenuShell>}
       {screen === "infusionsmith" && <MenuShell title="INFUSIONSMITH" subtitle="Only one gun and one light-channel infusion can remain stable" onClose={() => actionRef.current?.close()}><div className="infusion-grid">
-        <button className="infusion-card unlocked fluorite-forge" onClick={() => actionRef.current?.synthesizeFluorite()} style={{ "--crystal": CRYSTALS.fluorite.css } as React.CSSProperties}><i /><span>CURRENCY SYNTHESIS</span><strong>CREATE FLUORITE</strong><p>Infuse 1 Malachite + 1 Amethyst + 1 Quartz + 1 Corrupted crystal. Fluorite cannot be found in rooms.</p></button>
+        <button className="infusion-card unlocked fluorite-forge" onClick={() => actionRef.current?.synthesizeFluorite()} style={{ "--crystal": CRYSTALS.fluorite.css } as React.CSSProperties}><i /><span>CURRENCY SYNTHESIS</span><strong>CREATE 2 FLUORITE</strong><p>Infuse 1 Malachite + 1 Amethyst + 1 Quartz + 1 Corrupted crystal. Creates two Fluorite for Pers Hub.</p></button>
         {CRYSTAL_KEYS.map((key) => { const unlocked = hud.discovered.includes(key); const active = hud.gunInfusion === key || hud.lightInfusion === key; return <button key={key} className={`infusion-card ${unlocked ? "unlocked" : "locked"} ${active ? "active" : ""}`} onClick={() => actionRef.current?.infuse(key)} disabled={!unlocked} style={{ "--crystal": CRYSTALS[key].css } as React.CSSProperties}><i /><span>{CRYSTALS[key].target}</span><strong>{unlocked ? CRYSTALS[key].label : "UNDISCOVERED"}</strong><p>{unlocked ? CRYSTALS[key].effect : "Recover the mineral specimen to decode this schema."}</p></button>; })}
       </div></MenuShell>}
       {screen === "pershub" && <MenuShell title="PERS HUB" subtitle="Room 032 · Noble Pers trades only in synthesized Fluorite" onClose={() => actionRef.current?.close()}><div className="pers-layout">

@@ -30,13 +30,13 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build static game
         run: npm run build:pages
 
-      - name: Check encounters and model geometry
-        run: node --test tests/encounters.test.cjs
+      - name: Check encounters, progression and multiplayer transport
+        run: node --test tests/encounters.test.cjs tests/multiplayer.test.cjs
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

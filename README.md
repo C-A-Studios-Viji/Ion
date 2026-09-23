@@ -12,6 +12,26 @@ settings, each push to `main` builds and publishes the game automatically.
 The Pages build uses relative asset URLs, so it works from the `/Ion/`
 repository path as well as a custom domain.
 
+## Runs, badges and two-player co-op
+
+Open **Saved runs** from the main menu to start or resume one of three local
+save slots. Each room entry is saved automatically; the pause menu also offers
+a manual save for crystals, inventory, tuned resonators and collected specimens.
+Saves and the 100 badge records remain in that browser's storage. Clearing site
+data removes them, and they do not follow an account to another device.
+
+Open **Play with a friend** to host a two-player room and share the five-digit
+code with a friend. They choose **Join room**, enter the code, and join the
+host's current descent. Room transitions, pickups, resonators, enemies, player
+positions and revives use an actual WebRTC data connection with PeerJS
+signaling. Both browsers must stay online, and the host must leave their tab
+open. This uses PeerJS's public signaling server, so restrictive networks may
+need a TURN relay or a self-hosted PeerServer for reliable connections.
+
+The Infusionsmith converts Malachite, Amethyst, Quartz and Corrupted crystal
+into two Fluorite per batch. Normal rooms can contain one through four Crawlers,
+with each additional Crawler less likely than the previous one.
+
 ## 3D model assets
 
 The neon pursuit update adds rounded props, gradient shading, blue skylight

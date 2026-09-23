@@ -36,8 +36,35 @@ function gameHarness(){
     runtime.room=room;runtime.checkpoint=null;saved.set('ion-checkpoint',JSON.stringify({room,chaseState,ammo:6,battery:100,crystals:{malachite:0,amethyst:0,quartz:0,obsidian:0,citrine:0,fluorite:0,corrupted:0},discovered:[],gunInfusion:null,lightInfusion:null,accessKeys:10,maxAmmo:8}));act.restartCheckpoint();
   };
   const useAt=object=>{runtime.player.copy(object.position).add(new THREE.Vector3(0,1.65,0));step();act.interact();};
-  return {runtime,act,step,enter,useAt,load};
+  return {runtime,act,step,enter,useAt,load,saved};
 }
+
+test('two Fluorite per Infusionsmith batch, up to four rarer crawlers, 100 persistent badges and three save slots',async()=>{
+  const h=gameHarness();await Promise.resolve();await Promise.resolve();
+  const progression=h.load(path.join(root,'app/progression.ts'));
+  assert.equal(progression.BADGES.length,100);
+  assert.equal(new Set(progression.BADGES.map(b=>b.id)).size,100);
+  const allRolls=(...values)=>{let i=0;return()=>values[i++]};
+  assert.equal(progression.rollCrawlerPack(allRolls(.99),0),0);
+  assert.equal(progression.rollCrawlerPack(allRolls(0,.99),0),1);
+  assert.equal(progression.rollCrawlerPack(allRolls(0,0,.99),0),2);
+  assert.equal(progression.rollCrawlerPack(allRolls(0,0,0,.99),0),3);
+  assert.equal(progression.rollCrawlerPack(allRolls(0,0,0,0),0),4);
+  h.runtime.crystals={malachite:2,amethyst:2,quartz:2,corrupted:2,fluorite:0,obsidian:0,citrine:0};
+  h.act.synthesizeFluorite();assert.equal(h.runtime.crystals.fluorite,2);
+  assert.equal(h.runtime.crystals.malachite,1);
+  h.act.synthesizeFluorite();assert.equal(h.runtime.crystals.fluorite,4);
+  assert(progression.BADGES.some(b=>b.id==='forge-2'));
+  h.act.startNewSlot(0);h.act.start(true);h.act.saveRun();
+  const slots=progression.readRunSlots({getItem:key=>h.saved.get(key)??null});
+  assert.equal(slots.length,3);assert.equal(slots[0].state.room,1);assert.equal(slots[1],null);
+  const progress=JSON.parse(h.saved.get('ion-badges-v1'));assert(progress.unlocked.includes('saved-run'));
+  h.runtime.crystals.malachite=7;h.runtime.ammo=3;
+  h.act.saveRun();h.act.startNewSlot(1);h.act.start(true);
+  assert.equal(h.runtime.crystals.malachite,0);
+  h.act.loadSlot(0);
+  assert.equal(h.runtime.crystals.malachite,7);assert.equal(h.runtime.ammo,3);
+});
 
 test('seven five-room scheduled chases and exact 2% Remetons boundary',()=>{
   const h=gameHarness();const rules=h.load(path.join(root,'app/encounters.ts'));
