@@ -151,3 +151,46 @@ test('a fresh descent cannot load an unreached stale Room 25 checkpoint',async()
   const h=gameHarness();await Promise.resolve();await Promise.resolve();h.enter(25);assert.equal(h.runtime.room,25);
   h.act.start(true);assert.equal(h.runtime.room,1);h.act.restartCheckpoint();assert.equal(h.runtime.room,1);
 });
+
+test('Paradox jar, whirlpool Essence, Pers rift, reversed saves and *200 ending are playable',async()=>{
+  const h=gameHarness();await Promise.resolve();await Promise.resolve();
+  const rules=h.load(path.join(root,'app/paradox.ts'));
+  assert.equal(rules.paradoxEncounter(25,.99),'grin');
+  assert.equal(rules.paradoxEncounter(50,0),'grin');
+  assert.equal(rules.paradoxEncounter(26,.06999),'blob');
+  assert.equal(rules.paradoxEncounter(26,.07),null);
+  assert.equal(rules.canEnterParadox(true,true,1),true);
+  h.enter(1);let r=h.runtime;
+  const jar=r.pickups.find(p=>p.kind==='jar');assert(jar);h.useAt(jar.object);
+  assert.equal(r.paradoxJar,true);assert.equal(r.paradoxJarEquipped,true);
+  const jarBadge=JSON.parse(h.saved.get('ion-badges-v1'));
+  assert(!jarBadge.unlocked.includes('paradox-maker'));
+  h.enter(32);r.paradoxJar=true;r.paradoxJarEquipped=true;r.crystals.malachite=1;
+  assert(r.persActor?.visible);
+  r.player.set(0,1.65,1.8);r.yaw=0;r.pitch=0;h.step();r.camera.updateMatrixWorld(true);r.roomGroup.updateMatrixWorld(true);
+  const debugRay=new THREE.Raycaster();debugRay.setFromCamera(new THREE.Vector2(),r.camera);const persTargets=[];r.persActor.traverse(child=>{if(child.isMesh)persTargets.push(child);});
+  assert(debugRay.intersectObjects(persTargets,false).length>0,JSON.stringify({camera:r.camera.position.toArray(),direction:debugRay.ray.direction.toArray(),pers:new THREE.Box3().setFromObject(r.persActor).getCenter(new THREE.Vector3()).toArray(),meshes:persTargets.length}));
+  h.act.fire();assert.equal(r.paradoxRift,true);
+  assert.equal(r.stations.some(s=>s.kind==='pershub'),false);
+  const whirlpool=r.hazards[0];assert(whirlpool);
+  r.player.copy(whirlpool.object.position).add(new THREE.Vector3(.2,2.1,0));r.grounded=false;r.verticalVelocity=2;
+  h.step();assert.equal(r.paradoxEssence,true,JSON.stringify({player:r.player.toArray(),hazard:whirlpool.object.position.toArray(),grounded:r.grounded,cooldown:whirlpool.cooldown,jar:r.paradoxJarEquipped}));
+  assert(JSON.parse(h.saved.get('ion-badges-v1')).unlocked.includes('essence-bearer'));
+  const rift=r.stations.find(s=>s.kind==='rift');assert(rift);
+  h.useAt(rift.object);
+  assert.equal(r.paradoxWorld,true);assert.equal(r.room,32);
+  assert.equal(r.paradoxEssence,false);assert.equal(r.crystals.malachite,0);
+  assert.equal(r.persHubActive,false);assert(r.roomName.startsWith('*032'));
+  r.paradoxJar=true;r.paradoxGrinEncountered=true;
+  const savedState={room:200,chaseState:null,ammo:r.ammo,battery:100,
+    crystals:{...r.crystals},discovered:[...r.discovered],gunInfusion:null,lightInfusion:null,
+    accessKeys:10,maxAmmo:8,paradoxWorld:true,paradoxJar:true,paradoxGrinEncountered:true};
+  h.saved.set('ion-checkpoint',JSON.stringify(savedState));r.room=200;r.checkpoint=null;h.act.restartCheckpoint();
+  assert.equal(r.room,200);assert.equal(r.paradoxWorld,true);
+  assert.equal(r.grinIncoming,true);assert.equal(r.doorUnlocked,false);
+  assert(r.stations.some(s=>s.kind==='rift'));
+  let progress=JSON.parse(h.saved.get('ion-badges-v1'));
+  assert(progress.unlocked.includes('paradox-maker'));
+  assert(!progress.unlocked.includes('impossible-return'));
+  r.nearest={kind:'door'};h.act.interact();assert.equal(r.doorOpening,false);
+});

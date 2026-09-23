@@ -6,7 +6,7 @@ export type PartyMessage =
   | { type:"pose"; pose:Pose }
   | { type:"room"; state:unknown }
   | { type:"world"; room:number; noiseTime:number; grinIncoming:boolean; grinWarningTimer:number; doorOpening:boolean; enemies:{kind:string;alive:boolean;x:number;y:number;z:number}[] }
-  | { type:"action"; room:number; action:"pickup"|"resonator"|"door"|"fire"|"revive"; id?:number; x?:number; y?:number; z?:number }
+  | { type:"action"; room:number; action:"pickup"|"resonator"|"door"|"fire"|"revive"|"pers"|"rift"|"essence"; id?:number; x?:number; y?:number; z?:number }
   | { type:"request-room"; room:number }
   | { type:"dead"; room:number };
 
