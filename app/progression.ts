@@ -1,9 +1,10 @@
 export type BadgeEvent =
   | "room" | "crystal" | "encounter" | "escape" | "kill" | "death" | "craft"
   | "infuse" | "synthesize" | "specimen" | "resonator" | "chase" | "pers_trade"
-  | "pers_item" | "basdino" | "banish" | "multiplayer" | "revive" | "save";
+  | "pers_item" | "basdino" | "banish" | "multiplayer" | "revive" | "save" | "paradox";
 
-export type Badge = { id: string; title: string; description: string; event: BadgeEvent; target: number; detail?: string };
+export type BadgeRarity = "standard" | "rare" | "ultra";
+export type Badge = { id: string; title: string; description: string; tutorial?: string; event: BadgeEvent; target: number; detail?: string; rarity?: BadgeRarity };
 const milestones = [2, 5, 10, 20, 25, 50, 75, 100, 150, 200];
 const entities = ["entity", "blob", "haidini", "crawler", "watcher", "sound", "prism", "mimic", "wraith", "noise", "remetons"];
 const minerals = ["malachite", "amethyst", "quartz", "obsidian", "citrine", "fluorite", "corrupted"];
@@ -14,21 +15,30 @@ export const BADGES: Badge[] = [
   ...entities.map(entity => ({id:`meet-${entity}`,title:`First ${entity.toUpperCase()}`,description:`Encounter ${entity}.`,event:"encounter" as const,target:1,detail:entity})),
   ...entities.map(entity => ({id:`survive-${entity}`,title:`Survive ${entity.toUpperCase()}`,description:`Escape a room containing ${entity}.`,event:"escape" as const,target:1,detail:entity})),
   ...minerals.map(mineral => ({id:`find-${mineral}`,title:`${mineral.toUpperCase()} specimen`,description:`Collect ${mineral}.`,event:"crystal" as const,target:1,detail:mineral})),
-  ...[1, 5, 10, 25, 50, 100, 250, 500].map(target => ({id:`collect-${target}`,title:`Mineral collector ${target}`,description:`Collect ${target} minerals across runs.`,event:"crystal" as const,target})),
-  ...[1, 5, 10, 25, 50, 100].map(target => ({id:`craft-${target}`,title:`Field crafter ${target}`,description:`Craft ${target} supplies.`,event:"craft" as const,target})),
+  ...[1, 5, 10, 25, 50].map(target => ({id:`collect-${target}`,title:`Mineral collector ${target}`,description:`Collect ${target} minerals across runs.`,event:"crystal" as const,target})),
+  ...[1, 5, 10, 25, 50].map(target => ({id:`craft-${target}`,title:`Field crafter ${target}`,description:`Craft ${target} supplies.`,event:"craft" as const,target})),
   ...[1, 3, 7, 15, 30].map(target => ({id:`infuse-${target}`,title:`Infusion expert ${target}`,description:`Apply ${target} infusions.`,event:"infuse" as const,target})),
   ...[1, 2, 5, 10, 25, 50].map(target => ({id:`forge-${target}`,title:`Fluorite foundry ${target}`,description:`Forge ${target} batches of two Fluorite.`,event:"synthesize" as const,target})),
-  ...[1, 5, 10, 25, 50, 100].map(target => ({id:`pers-${target}`,title:`Pers patron ${target}`,description:`Trade with Pers ${target} times.`,event:"pers_trade" as const,target})),
+  ...[1, 5, 10, 25, 50].map(target => ({id:`pers-${target}`,title:`Pers patron ${target}`,description:`Trade with Pers ${target} times.`,event:"pers_trade" as const,target})),
   ...wares.map(ware => ({id:`pers-${ware}`,title:`Pers: ${ware}`,description:`Receive ${ware} from Pers.`,event:"pers_item" as const,target:1,detail:ware})),
   ...[1, 3, 5, 10].map(target => ({id:`bond-${target}`,title:`Basdino bond ${target}`,description:`Bond ${target} Basdinos.`,event:"basdino" as const,target})),
   ...[1, 5, 10, 25].map(target => ({id:`specimens-${target}`,title:`Noise samples ${target}`,description:`Collect ${target} Noise specimens.`,event:"specimen" as const,target})),
   ...[1, 4, 10, 30].map(target => ({id:`resonators-${target}`,title:`Resonance ${target}`,description:`Tune ${target} resonators.`,event:"resonator" as const,target})),
   ...[1, 3, 5, 10].map(target => ({id:`chases-${target}`,title:`Blob survivor ${target}`,description:`Finish ${target} five-room chases.`,event:"chase" as const,target})),
-  ...[1, 5, 10].map(target => ({id:`banish-${target}`,title:`Exorcist ${target}`,description:`Banish ${target} entities.`,event:"banish" as const,target})),
-  ...[1, 3, 10].map(target => ({id:`party-${target}`,title:`Partners ${target}`,description:`Join or host ${target} multiplayer sessions.`,event:"multiplayer" as const,target})),
+  ...[1, 5].map(target => ({id:`banish-${target}`,title:`Exorcist ${target}`,description:`Banish ${target} entities.`,event:"banish" as const,target})),
+  ...[1, 3].map(target => ({id:`party-${target}`,title:`Partners ${target}`,description:`Join or host ${target} multiplayer sessions.`,event:"multiplayer" as const,target})),
   {id:"friend-saved",title:"For a Friend",description:"Revive a teammate in multiplayer.",event:"revive",target:1},
   {id:"saved-run",title:"Safe Return",description:"Save a run to a slot.",event:"save",target:1},
+  {id:"paradox-maker",title:"Creating a Paradox",description:"Shoot Pers, collect Essence, offer Malachite, and reach Door 200 in the reversed world.",tutorial:"Find a jar at Door 1, 11, or 111. Leap into a whirlpool with it equipped to collect Essence, then shoot Pers in Pers Hub while carrying Malachite. Survive the reversed world and reach *200.",event:"paradox",target:1,rarity:"ultra"},
+  {id:"paradox-echo",title:"The Other Side",description:"Enter the reversed facility without losing your run.",tutorial:"Trigger Creating a Paradox and cross the glitch threshold alive.",event:"paradox",target:1,rarity:"ultra"},
+  {id:"asterisk-200",title:"Asterisk Extraction",description:"Reach *200 in the reversed facility.",tutorial:"In the reversed world, follow the asterisk door numbers until *200.",event:"paradox",target:1,rarity:"ultra"},
+  {id:"grin-cycle",title:"Grin Around the Corner",description:"Survive the Grin on every twenty-fifth reversed door.",tutorial:"Reach a reversed door divisible by 25 and escape the guaranteed Grin encounter.",event:"escape",target:1,detail:"reversed-grin",rarity:"ultra"},
+  {id:"blob-omen",title:"Seven Percent Omen",description:"Survive a random reversed-world Blob breach.",tutorial:"A reversed room has a 7% chance to summon the Blob. Survive the breach.",event:"escape",target:1,detail:"reversed-blob",rarity:"ultra"},
+  {id:"essence-bearer",title:"Essence Bearer",description:"Carry Essence from a whirlpool to the Paradox ritual.",tutorial:"Use the jar from Door 1, 11, or 111 inside a whirlpool, then keep the Essence until the ritual.",event:"paradox",target:1,rarity:"ultra"},
+  {id:"impossible-return",title:"Impossible Return",description:"Return from the reversed world with every infusion intact.",tutorial:"Complete the Paradox route and return without losing an infusion.",event:"paradox",target:1,rarity:"ultra"},
 ];
+// Fill every generated entry with a concise tutorial while keeping special badges explicit.
+BADGES.forEach(b => { if (!b.tutorial) b.tutorial = b.description; });
 if (BADGES.length !== 100 || new Set(BADGES.map(b => b.id)).size !== 100) throw new Error("Badge catalog must contain 100 unique badges");
 
 export type BadgeProgress = { unlocked: string[]; counts: Partial<Record<BadgeEvent, number>>; detailCounts: Record<string, number> };
