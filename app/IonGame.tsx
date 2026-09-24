@@ -2220,7 +2220,9 @@ export default function IonGame() {
           const force = Math.pow(1 - distance / hazard.radius, 1.2) * 4.6;
           if(distance>0.01)runtime.player.add(delta.normalize().multiplyScalar(force * dt));
           if (distance < 0.78 && hazard.cooldown <= 0) {
-            const capturedEssence=runtime.paradoxJarEquipped&&!runtime.paradoxEssence&&!runtime.paradoxWorld&&!runtime.grounded;
+            // Reaching the core is the skill check. Requiring `!grounded` made valid
+            // jumps miss on the frame movement snapped the player back to the floor.
+            const capturedEssence=runtime.paradoxJarEquipped&&!runtime.paradoxEssence&&!runtime.paradoxWorld;
             if(capturedEssence){
               runtime.paradoxEssence=true;badge("paradox","essence");
               partyRef.current?.send({type:"action",room:runtime.room,action:"essence"});

@@ -173,7 +173,8 @@ test('Paradox jar, whirlpool Essence, Pers rift, reversed saves and *200 ending 
   h.act.fire();assert.equal(r.paradoxRift,true);
   assert.equal(r.stations.some(s=>s.kind==='pershub'),false);
   const whirlpool=r.hazards[0];assert(whirlpool);
-  r.player.copy(whirlpool.object.position).add(new THREE.Vector3(.2,2.1,0));r.grounded=false;r.verticalVelocity=2;
+  // Capture must still work when the landing frame has already marked the player grounded.
+  r.player.copy(whirlpool.object.position).add(new THREE.Vector3(.2,1.65,0));r.grounded=true;r.verticalVelocity=0;
   h.step();assert.equal(r.paradoxEssence,true,JSON.stringify({player:r.player.toArray(),hazard:whirlpool.object.position.toArray(),grounded:r.grounded,cooldown:whirlpool.cooldown,jar:r.paradoxJarEquipped}));
   assert(JSON.parse(h.saved.get('ion-badges-v1')).unlocked.includes('essence-bearer'));
   const rift=r.stations.find(s=>s.kind==='rift');assert(rift);
