@@ -1,6 +1,6 @@
 import Peer, { type DataConnection } from "peerjs";
 
-export type Pose = { x: number; y: number; z: number; yaw: number; light: boolean; dead: boolean; room: number };
+export type Pose = { x: number; y: number; z: number; yaw: number; light: boolean; dead: boolean; room: number; name:string };
 export type PartyMessage =
   | { type:"hello"; state:unknown; pose:Pose }
   | { type:"pose"; pose:Pose }
@@ -13,12 +13,19 @@ export type PartyMessage =
 export const partyPeerId = (code: string) => `ion-facility-${code}`;
 export const validPartyCode = (code: string) => /^\d{5}$/.test(code);
 export const randomPartyCode = () => String(crypto.getRandomValues(new Uint32Array(1))[0] % 90000 + 10000);
+export const hasTripleDigit = (code:string) => /^\d{5}$/.test(code) && [...new Set(code)].some(digit=>code.split(digit).length-1>=3);
+const NAME_PREFIXES=["Scout","Elder","Impaling","Stout","Lucrative","Silent","Crimson","Neon","Hollow","Royal","Brisk","Glitching","Brave","Distant","Arcane","Velvet"];
+const NAME_NOUNS=["Salmon","Elmer","Ion","Shoe","Loquat","Quartz","Moth","Raven","Lantern","Badger","Comet","Gecko","Cobra","Echo","Otter","Falcon"];
+export function randomPlayerName(rand=Math.random):string {
+  return `${NAME_PREFIXES[Math.floor(rand()*NAME_PREFIXES.length)]}${NAME_NOUNS[Math.floor(rand()*NAME_NOUNS.length)]}`;
+}
 
 // One host and one friend. The host owns the room number and hazard rolls.
 export class PartyLink {
   peer: Peer | null = null;
   connection: DataConnection | null = null;
   code = "";
+  readonly playerName = randomPlayerName();
   role: "host" | "guest" | null = null;
   onMessage: (message: PartyMessage) => void = () => {};
   onStatus: (status: string) => void = () => {};

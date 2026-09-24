@@ -3,7 +3,7 @@ export type BadgeEvent =
   | "infuse" | "synthesize" | "specimen" | "resonator" | "chase" | "pers_trade"
   | "pers_item" | "basdino" | "banish" | "multiplayer" | "revive" | "save" | "paradox";
 
-export type BadgeRarity = "standard" | "rare" | "ultra";
+export type BadgeRarity = "standard" | "rare" | "ultra" | "xtraultra";
 export type Badge = { id: string; title: string; description: string; tutorial?: string; event: BadgeEvent; target: number; detail?: string; rarity?: BadgeRarity };
 const milestones = [2, 5, 10, 20, 25, 50, 75, 100, 150, 200];
 const entities = ["entity", "blob", "haidini", "crawler", "watcher", "sound", "prism", "mimic", "wraith", "noise", "remetons"];
@@ -29,16 +29,16 @@ export const BADGES: Badge[] = [
   ...[1, 3].map(target => ({id:`party-${target}`,title:`Partners ${target}`,description:`Join or host ${target} multiplayer sessions.`,event:"multiplayer" as const,target})),
   {id:"friend-saved",title:"For a Friend",description:"Revive a teammate in multiplayer.",event:"revive",target:1},
   {id:"saved-run",title:"Safe Return",description:"Save a run to a slot.",event:"save",target:1},
-  {id:"paradox-maker",title:"Creating a Paradox",description:"Shoot Pers, collect Essence, offer Malachite, and reach Door 200 in the reversed world.",tutorial:"Find a jar at Door 1, 11, or 111. Equip it, leap into a whirlpool to collect Essence, then shoot Pers in Pers Hub or at an opening gate. Offer Malachite at the glitch and survive to *200.",event:"paradox",target:1,detail:"completed",rarity:"ultra"},
-  {id:"paradox-echo",title:"The Other Side",description:"Enter the reversed facility without losing your run.",tutorial:"Shoot Pers and offer Malachite plus a filled Essence jar at the glitch to cross alive.",event:"paradox",target:1,detail:"entered",rarity:"ultra"},
-  {id:"asterisk-200",title:"Asterisk Extraction",description:"Reach *200 in the reversed facility.",tutorial:"In the reversed world, follow the asterisk door numbers until *200.",event:"paradox",target:1,detail:"extracted",rarity:"ultra"},
+  {id:"paradox-echo",title:"The Other Side",description:"Shoot Pers and fall through the tear into Paradox.",tutorial:"Shoot Noble Pers, approach the tear that appears, then press E to fall through.",event:"paradox",target:1,detail:"entered",rarity:"ultra"},
+  {id:"gold-ascent",title:"Gold Beyond Stone",description:"Find a Gold Bar on a prime-numbered door and enter Ascended.",tutorial:"Every prime-numbered door has a 14% Gold Bar roll. Collect one to begin the 20-door Ascended route.",event:"paradox",target:1,detail:"ascended",rarity:"ultra"},
+  {id:"ascendidox",title:"Ascendidox",description:"Find a Gold Bar while trapped inside Paradox.",event:"paradox",target:1,detail:"ascendidox",rarity:"xtraultra"},
+  {id:"paradox-conqueror",title:"Two Hundred Reversed",description:"Beat the 200-door Paradox—or survive its Ascended shortcut.",tutorial:"Reach *200 and escape through its return tear, or find Gold inside Paradox and clear all 20 Ascended doors.",event:"paradox",target:1,detail:"completed",rarity:"xtraultra"},
+  {id:"triple-signal",title:"Triple Signal",description:"Host or join with three matching digits in the five-digit code.",tutorial:"Multiplayer codes are random. Connect using any valid code containing one digit at least three times.",event:"multiplayer",target:1,detail:"triple-code",rarity:"xtraultra"},
   {id:"grin-cycle",title:"Grin Around the Corner",description:"Survive the Grin on every twenty-fifth reversed door.",tutorial:"Reach a reversed door divisible by 25 and escape the guaranteed Grin encounter.",event:"escape",target:1,detail:"reversed-grin",rarity:"ultra"},
   {id:"blob-omen",title:"Seven Percent Omen",description:"Survive a random reversed-world Blob breach.",tutorial:"A reversed room has a 7% chance to summon the Blob. Survive the breach.",event:"escape",target:1,detail:"reversed-blob",rarity:"ultra"},
-  {id:"essence-bearer",title:"Essence Bearer",description:"Carry Essence from a whirlpool to the Paradox ritual.",tutorial:"Equip a jar from Door 1, 11 or 111, jump into a whirlpool, and collect the Essence.",event:"paradox",target:1,detail:"essence",rarity:"ultra"},
-  {id:"impossible-return",title:"Impossible Return",description:"Return from the reversed world with every infusion intact.",tutorial:"After reaching *200 with all seven mineral infusions discovered, use the return rift.",event:"paradox",target:1,detail:"returned",rarity:"ultra"},
 ];
 // Fill every generated entry with a concise tutorial while keeping special badges explicit.
-BADGES.forEach(b => { if (!b.tutorial) b.tutorial = b.description; });
+BADGES.forEach(b => { if (!b.tutorial && b.id!=="ascendidox") b.tutorial = b.description; });
 if (BADGES.length !== 100 || new Set(BADGES.map(b => b.id)).size !== 100) throw new Error("Badge catalog must contain 100 unique badges");
 
 export type BadgeProgress = { unlocked: string[]; counts: Partial<Record<BadgeEvent, number>>; detailCounts: Record<string, number> };

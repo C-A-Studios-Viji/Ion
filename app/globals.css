@@ -33,7 +33,12 @@ body[data-glitch="true"] .ion-canvas { filter: contrast(1.55) saturate(.4) hue-r
 body[data-glitch="true"] .scanlines { opacity: .58; transform: skewX(-4deg); }
 body[data-paradox="true"] .ion-canvas {filter:hue-rotate(22deg) contrast(1.12)}
 body[data-paradox="true"] .hud-top-left .eyebrow,body[data-paradox="true"] .interaction-prompt {color:#e4b1ff;text-shadow:0 0 12px #a33aff}
+body[data-ascended="true"] .ion-canvas {filter:sepia(.16) saturate(1.35) brightness(1.08)}
+body[data-ascended="true"] .hud-top-left .eyebrow,body[data-ascended="true"] .interaction-prompt {color:#ffe887;text-shadow:0 0 14px #ffb300}
+body[data-riftfall="true"] .ion-canvas {animation:rift-fall 1.45s cubic-bezier(.2,.7,.1,1) both}
+body[data-riftfall="true"] .vignette {animation:rift-collapse 1.45s ease-in both}
 .paradox-indicator {position:fixed;right:20px;top:338px;z-index:7;max-width:min(38vw,280px);border:1px solid #e58aff88;border-radius:9px;padding:9px 12px;background:#1a062ae8;color:#ffe2ff;box-shadow:0 0 20px #bb55ff55;font-size:10px;letter-spacing:.1em;pointer-events:none}
+.paradox-indicator.ascended-indicator {border-color:#ffe26e;background:#2b1c03e8;color:#fff4b0;box-shadow:0 0 24px #ffc21f66}
 .essence-jar {border-color:#a9eeff!important;background:linear-gradient(135deg,#143952,#43175b)!important}
 @media(max-width:760px){.paradox-indicator{right:14px;top:343px;max-width:45vw;font-size:9px}}
 
@@ -357,6 +362,11 @@ body[data-paradox="true"] .hud-top-left .eyebrow,body[data-paradox="true"] .inte
 .badge-grid article {padding:14px;min-height:104px}.badge-grid article.locked {opacity:.48;filter:saturate(.45)}.badge-grid strong {font-size:14px}.badge-grid p {font-size:10px}
 .badge-grid article.badge-ultra {border-color:#f2a7ff;box-shadow:inset 0 0 22px #d03dff18,0 0 18px #d03dff22}
 .badge-grid article.badge-ultra strong {background:linear-gradient(105deg,#fff,#ff9cf5 22%,#7ffcff 48%,#fff39a 72%,#d09cff);background-size:220% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:badge-iridescence 4.5s linear infinite;text-shadow:0 0 16px #ff75f655}
+.badge-grid article.badge-xtraultra {border-color:#fff3a3;box-shadow:inset 0 0 30px #ff46e522,0 0 24px #71fbff42;background:linear-gradient(145deg,#190928f2,#052b2bf2,#332005ed)}
+.badge-grid article.badge-xtraultra strong {background:linear-gradient(90deg,#ff4ecd,#fff,#62fff0,#ffe65e,#9d62ff,#ff4ecd);background-size:320% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:badge-iridescence 2.4s linear infinite;text-shadow:0 0 18px #fff7}
+.badge-grid article.badge-xtraultra > span {color:#fff0a8;letter-spacing:.18em}.badge-grid article.badge-xtraultra small{color:#affff8}
 .badge-grid article.badge-rare strong {color:#7cecff}.badge-grid article.badge-ultra > span {color:#ffd2ff;letter-spacing:.16em}.badge-grid article small {display:block;color:#a9d9df;font-size:9px;line-height:1.5;margin-top:8px}.badge-grid article.badge-ultra small {color:#f1c8ff}
 @keyframes badge-iridescence {to {background-position:220% center}}
+@keyframes rift-fall {0%{transform:scale(1);filter:brightness(1)}35%{transform:scale(1.18) translateY(-2%);filter:contrast(1.8) hue-rotate(45deg)}100%{transform:scale(.08) translateY(420%);filter:brightness(0)}}
+@keyframes rift-collapse {0%{box-shadow:inset 0 0 12vw 3vw #8d35ff44}100%{box-shadow:inset 0 0 45vw 28vw #000}}
 @media(max-width:760px){.badge-toggle{right:14px;top:263px}.party-indicator{right:14px;top:303px}.save-grid{grid-template-columns:1fr}.badge-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.party-panel{padding:10px}}
