@@ -14,6 +14,17 @@ export const partyPeerId = (code: string) => `ion-facility-${code}`;
 export const validPartyCode = (code: string) => /^\d{5}$/.test(code);
 export const randomPartyCode = () => String(crypto.getRandomValues(new Uint32Array(1))[0] % 90000 + 10000);
 export const hasTripleDigit = (code:string) => /^\d{5}$/.test(code) && [...new Set(code)].some(digit=>code.split(digit).length-1>=3);
+const SECRET_SIGNALS:Record<string,"one-dev"|"skip-pers">={
+  "1DEV1":"one-dev",XXOOP:"skip-pers",C9P98H:"skip-pers",SK1PP:"skip-pers",N0PERS:"skip-pers",
+};
+export function secretSignal(code:string):"one-dev"|"skip-pers"|null {
+  return SECRET_SIGNALS[code.trim().toUpperCase()]??null;
+}
+const PEER_OPTIONS={host:"0.peerjs.com",port:443,path:"/",secure:true,debug:1,
+  config:{iceServers:[
+    {urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"},
+    {urls:"stun:global.stun.twilio.com:3478"},{urls:"stun:stun.cloudflare.com:3478"},
+  ]}} as const;
 const NAME_PREFIXES=["Scout","Elder","Impaling","Stout","Lucrative","Silent","Crimson","Neon","Hollow","Royal","Brisk","Glitching","Brave","Distant","Arcane","Velvet"];
 const NAME_NOUNS=["Salmon","Elmer","Ion","Shoe","Loquat","Quartz","Moth","Raven","Lantern","Badger","Comet","Gecko","Cobra","Echo","Otter","Falcon"];
 export function randomPlayerName(rand=Math.random):string {
@@ -37,14 +48,15 @@ export class PartyLink {
     if (!validPartyCode(code)) throw new Error("The room code must contain five digits.");
     this.close(); this.role="host"; this.code=code;
     try { await new Promise<void>((resolve,reject) => {
-      const peer=new Peer(partyPeerId(code)); this.peer=peer;
-      const timeout=setTimeout(()=>reject(new Error("The signaling service did not respond.")),12000);this.timer=timeout;
+      const peer=new Peer(partyPeerId(code),PEER_OPTIONS); this.peer=peer;
+      const timeout=setTimeout(()=>reject(new Error("The multiplayer relay did not respond. Check that WebRTC is allowed.")),20000);this.timer=timeout;
       peer.on("open",()=>{clearTimeout(timeout);this.timer=null;resolve();});
       peer.on("error",(error)=>{clearTimeout(timeout);this.timer=null;reject(error);this.onStatus(error.type==="unavailable-id"?"Code already in use. Try again.":`Connection error: ${error.message}`);});
       peer.on("connection",conn=>{
         if(this.connection){conn.close();return;}
         this.bind(conn);
       });
+      peer.on("disconnected",()=>{this.onStatus("Relay interrupted · reconnecting…");try{peer.reconnect();}catch{/* Peer may already be closing. */}});
     }); } catch(error) {this.close();throw error;}
     this.onStatus(`Room ${code} ready · waiting for a friend`);
     return code;
@@ -54,14 +66,15 @@ export class PartyLink {
     if(!validPartyCode(code)) throw new Error("Enter the five-digit room code.");
     this.close();this.role="guest";this.code=code;
     try { await new Promise<void>((resolve,reject)=>{
-      const peer=new Peer();this.peer=peer;
-      const timeout=setTimeout(()=>reject(new Error("Connection timed out. Check the code or network.")),16000);
+      const peer=new Peer(PEER_OPTIONS);this.peer=peer;
+      const timeout=setTimeout(()=>reject(new Error("Connection timed out. Confirm the host is waiting and both browsers allow WebRTC.")),25000);
       this.timer=timeout;
       peer.on("open",()=>{
-        const conn=peer.connect(partyPeerId(code),{serialization:"json",reliable:true});this.bind(conn);
+        const conn=peer.connect(partyPeerId(code),{serialization:"json",reliable:true,metadata:{name:this.playerName}});this.bind(conn);
         conn.on("open",()=>{clearTimeout(timeout);this.timer=null;resolve();});
       });
       peer.on("error",error=>{clearTimeout(timeout);this.timer=null;reject(error);this.onStatus(`Connection error: ${error.message}`);});
+      peer.on("disconnected",()=>{this.onStatus("Relay interrupted · reconnecting…");try{peer.reconnect();}catch{/* Peer may already be closing. */}});
     }); } catch(error) {this.close();throw error;}
   }
 
@@ -75,6 +88,11 @@ export class PartyLink {
     });
     conn.on("close",()=>{if(this.connection===conn){this.connection=null;this.onStatus(this.role==="host"?"Friend disconnected · room still open":"Host disconnected · return to solo play");this.onDisconnect();}});
     conn.on("error",error=>this.onStatus(`Peer error: ${error.message}`));
+    conn.peerConnection?.addEventListener("iceconnectionstatechange",()=>{
+      const state=conn.peerConnection?.iceConnectionState;
+      if(state==="checking")this.onStatus("Friend found · establishing encrypted route…");
+      if(state==="failed")this.onStatus("Direct route failed · retry from the same code");
+    });
   }
 
   send(message:PartyMessage) { if(this.connection?.open)this.connection.send(message); }

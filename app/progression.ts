@@ -1,9 +1,10 @@
 export type BadgeEvent =
   | "room" | "crystal" | "encounter" | "escape" | "kill" | "death" | "craft"
   | "infuse" | "synthesize" | "specimen" | "resonator" | "chase" | "pers_trade"
-  | "pers_item" | "basdino" | "banish" | "multiplayer" | "revive" | "save" | "paradox";
+  | "pers_item" | "basdino" | "banish" | "multiplayer" | "revive" | "save" | "paradox"
+  | "gold" | "ascended" | "paradox_room" | "secret";
 
-export type BadgeRarity = "standard" | "rare" | "ultra" | "xtraultra";
+export type BadgeRarity = "standard" | "rare" | "ultra" | "xtraultra" | "starplus";
 export type Badge = { id: string; title: string; description: string; tutorial?: string; event: BadgeEvent; target: number; detail?: string; rarity?: BadgeRarity };
 const milestones = [2, 5, 10, 20, 25, 50, 75, 100, 150, 200];
 const entities = ["entity", "blob", "haidini", "crawler", "watcher", "sound", "prism", "mimic", "wraith", "noise", "remetons"];
@@ -30,16 +31,29 @@ export const BADGES: Badge[] = [
   {id:"friend-saved",title:"For a Friend",description:"Revive a teammate in multiplayer.",event:"revive",target:1},
   {id:"saved-run",title:"Safe Return",description:"Save a run to a slot.",event:"save",target:1},
   {id:"paradox-echo",title:"The Other Side",description:"Shoot Pers and fall through the tear into Paradox.",tutorial:"Shoot Noble Pers, approach the tear that appears, then press E to fall through.",event:"paradox",target:1,detail:"entered",rarity:"ultra"},
-  {id:"gold-ascent",title:"Gold Beyond Stone",description:"Find a Gold Bar on a prime-numbered door and enter Ascended.",tutorial:"Every prime-numbered door has a 14% Gold Bar roll. Collect one to begin the 20-door Ascended route.",event:"paradox",target:1,detail:"ascended",rarity:"ultra"},
+  {id:"gold-ascent",title:"Gold Beyond Stone",description:"Find a Gold Bar on a prime-numbered door and enter Ascended.",tutorial:"Every prime-numbered door has a 1.4% Gold Bar roll. Collect one to begin the 20-door Ascended route.",event:"paradox",target:1,detail:"ascended",rarity:"ultra"},
   {id:"ascendidox",title:"Ascendidox",description:"Find a Gold Bar while trapped inside Paradox.",event:"paradox",target:1,detail:"ascendidox",rarity:"xtraultra"},
   {id:"paradox-conqueror",title:"Two Hundred Reversed",description:"Beat the 200-door Paradox—or survive its Ascended shortcut.",tutorial:"Reach *200 and escape through its return tear, or find Gold inside Paradox and clear all 20 Ascended doors.",event:"paradox",target:1,detail:"completed",rarity:"xtraultra"},
   {id:"triple-signal",title:"Triple Signal",description:"Host or join with three matching digits in the five-digit code.",tutorial:"Multiplayer codes are random. Connect using any valid code containing one digit at least three times.",event:"multiplayer",target:1,detail:"triple-code",rarity:"xtraultra"},
   {id:"grin-cycle",title:"Grin Around the Corner",description:"Survive the Grin on every twenty-fifth reversed door.",tutorial:"Reach a reversed door divisible by 25 and escape the guaranteed Grin encounter.",event:"escape",target:1,detail:"reversed-grin",rarity:"ultra"},
   {id:"blob-omen",title:"Seven Percent Omen",description:"Survive a random reversed-world Blob breach.",tutorial:"A reversed room has a 7% chance to summon the Blob. Survive the breach.",event:"escape",target:1,detail:"reversed-blob",rarity:"ultra"},
+  ...[1,5,10,15,20].map(target=>({id:`ascended-${target}`,title:`Ascended ${target}`,description:`Reach Ascended Door ${target}.`,event:"ascended" as const,target,rarity:target===20?"ultra" as const:"rare" as const})),
+  ...[1,2,3,5,10].map(target=>({id:`gold-${target}`,title:`Aureate Collector ${target}`,description:`Find ${target} Gold Bar${target===1?"":"s"}.`,event:"gold" as const,target,rarity:target>=5?"ultra" as const:"rare" as const})),
+  ...[25,50,75,100,150].map(target=>({id:`paradox-depth-${target}`,title:`Paradox Depth *${target}`,description:`Reach Door *${target} inside Paradox.`,event:"paradox_room" as const,target,rarity:target>=100?"ultra" as const:"rare" as const})),
+  ...[5,10,25,50,100].map(target=>({id:`deaths-${target}`,title:`Still Descending ${target}`,description:`Fall ${target} times and return to the facility.`,event:"death" as const,target,rarity:target>=50?"rare" as const:"standard" as const})),
+  ...[10,25].map(target=>({id:`party-${target}`,title:`Linked Survivors ${target}`,description:`Join or host ${target} multiplayer sessions.`,event:"multiplayer" as const,target,rarity:"rare" as const})),
+  {id:"one-dev-one-badge",title:"One Dev, One Badge.",description:"A private developer signal answered.",event:"secret",target:1,detail:"one-dev",rarity:"starplus"},
+  {id:"better-skip-pers",title:"Better Skip Pers",description:"A forbidden join signal bypassed Noble Pers.",event:"secret",target:1,detail:"skip-pers",rarity:"starplus"},
+  {id:"win",title:"Win",description:"Complete the hidden Ascended–Pers–Blob sequence and claim what remains.",event:"secret",target:1,detail:"win",rarity:"starplus"},
 ];
-// Fill every generated entry with a concise tutorial while keeping special badges explicit.
-BADGES.forEach(b => { if (!b.tutorial && b.id!=="ascendidox") b.tutorial = b.description; });
-if (BADGES.length !== 100 || new Set(BADGES.map(b => b.id)).size !== 100) throw new Error("Badge catalog must contain 100 unique badges");
+if (BADGES.length !== 125 || new Set(BADGES.map(b => b.id)).size !== 125) throw new Error("Badge catalog must contain 125 unique badges");
+// Exactly 40% of the archive is intentionally undocumented. Secret-tier records and
+// Ascendidox are always among them; the remainder is distributed across the catalog.
+const tutorialPriority=[...BADGES.filter(b=>b.rarity==="starplus"||b.id==="ascendidox"),...BADGES.filter((_,index)=>index%5===0||index%5===2),...BADGES];
+const tutoriallessIds=new Set<string>();
+for(const badge of tutorialPriority){if(tutoriallessIds.size>=BADGES.length*.4)break;tutoriallessIds.add(badge.id);}
+BADGES.forEach(b=>{if(tutoriallessIds.has(b.id))delete b.tutorial;else if(!b.tutorial)b.tutorial=b.description;});
+export const TUTORIALLESS_BADGE_COUNT=BADGES.filter(b=>!b.tutorial).length;
 
 export type BadgeProgress = { unlocked: string[]; counts: Partial<Record<BadgeEvent, number>>; detailCounts: Record<string, number> };
 export const emptyBadgeProgress = (): BadgeProgress => ({unlocked:[],counts:{},detailCounts:{}});

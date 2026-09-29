@@ -8,14 +8,14 @@ const {EventEmitter}=require('node:events');
 const {webcrypto}=require('node:crypto');
 
 test('five-digit host and guest exchange room state and live actions over a data connection',async()=>{
-  const peers=new Map();
+  const peers=new Map(),peerOptions=[];
   class Connection extends EventEmitter{
     open=false;
     send(message){if(this.open)queueMicrotask(()=>this.other.emit('data',message));}
     close(){if(!this.open)return;this.open=false;this.emit('close');this.other.open=false;this.other.emit('close');}
   }
   class Peer extends EventEmitter{
-    constructor(id){super();this.id=id??`guest-${peers.size}`;peers.set(this.id,this);queueMicrotask(()=>this.emit('open',this.id));}
+    constructor(id,options){super();if(id&&typeof id==='object'){options=id;id=undefined;}peerOptions.push(options);this.id=id??`guest-${peers.size}`;peers.set(this.id,this);queueMicrotask(()=>this.emit('open',this.id));}
     connect(id){
       const client=new Connection(),server=new Connection();client.other=server;server.other=client;
       queueMicrotask(()=>{const host=peers.get(id);if(!host){this.emit('error',new Error('Room unavailable'));return;}
@@ -28,15 +28,18 @@ test('five-digit host and guest exchange room state and live actions over a data
   const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
   const module={exports:{}};
   vm.runInNewContext(code,{module,exports:module.exports,require:()=>Peer,crypto:webcrypto,setTimeout,clearTimeout,console,queueMicrotask});
-  const {PartyLink,partyPeerId,validPartyCode,hasTripleDigit,randomPlayerName}=module.exports;
+  const {PartyLink,partyPeerId,validPartyCode,hasTripleDigit,randomPlayerName,secretSignal}=module.exports;
   assert.equal(validPartyCode('12345'),true);assert.equal(validPartyCode('1234'),false);
   assert.equal(hasTripleDigit('11311'),true);assert.equal(hasTripleDigit('12345'),false);
   assert.equal(randomPlayerName(()=>0),'ScoutSalmon');
+  assert.equal(secretSignal('xxoop'),'skip-pers');assert.equal(secretSignal('C9P98H'),'skip-pers');assert.equal(secretSignal('1DEV1'),'one-dev');assert.equal(secretSignal('NOPE'),null);
   assert.equal(partyPeerId('12345'),'ion-facility-12345');
   const host=new PartyLink(),guest=new PartyLink();let receivedByGuest,receivedByHost;
   guest.onMessage=message=>{receivedByGuest=message;};host.onMessage=message=>{receivedByHost=message;};
   host.onConnect=()=>host.send({type:'hello',state:{room:25},pose:{x:0,y:0,z:1,yaw:0,light:true,dead:false,room:25,name:host.playerName}});
   assert.equal(await host.host('12345'),'12345');await guest.join('12345');
+  assert.equal(peerOptions.length,2);assert(peerOptions.every(options=>options.host==='0.peerjs.com'&&options.secure===true));
+  assert(peerOptions.every(options=>options.config.iceServers.length>=4));
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(receivedByGuest.type,'hello');assert.equal(receivedByGuest.state.room,25);
   assert.equal(typeof receivedByGuest.pose.name,'string');assert(receivedByGuest.pose.name.length>4);

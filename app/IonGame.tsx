@@ -9,7 +9,7 @@ import { gradientMaterial, smoothNormals } from "./surfaceStyle";
 import { HorrorAudio } from "./horrorAudio";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { BADGES, awardBadges, emptyBadgeProgress, readRunSlots, writeRunSlot, rollCrawlerPack, type BadgeEvent, type BadgeProgress, type RunSlot } from "./progression";
-import { PartyLink, hasTripleDigit, validPartyCode, type PartyMessage, type Pose } from "./multiplayer";
+import { PartyLink, hasTripleDigit, secretSignal, validPartyCode, type PartyMessage, type Pose } from "./multiplayer";
 import { goldBarSpawns, paradoxEncounter } from "./paradox";
 
 type CrystalKey =
@@ -103,7 +103,7 @@ type HudState = {
 
 type Pickup = {
   object: THREE.Group;
-  kind: "crystal" | "ammo" | "battery" | "specimen" | "jar" | "gold";
+  kind: "crystal" | "ammo" | "battery" | "specimen" | "jar" | "gold" | "neonBadge";
   crystal?: CrystalKey;
   mandatory?: boolean;
 };
@@ -227,6 +227,10 @@ type Runtime = {
   ascendedOriginRoom: number;
   ascendedFromParadox: boolean;
   goldBarPresent: boolean;
+  ascendedCleared: boolean;
+  winQuestArmed: boolean;
+  winQuestBlob: boolean;
+  winBadgeSpawned: boolean;
   inventory: Record<ItemKey, number>;
   basdinos: number;
   basdinoModels: THREE.Group[];
@@ -291,6 +295,10 @@ type SaveData = {
   ascendedOriginRoom?: number;
   ascendedFromParadox?: boolean;
   goldBarPresent?: boolean;
+  ascendedCleared?: boolean;
+  winQuestArmed?: boolean;
+  winQuestBlob?: boolean;
+  winBadgeSpawned?: boolean;
 };
 
 type ActionApi = {
@@ -811,6 +819,7 @@ export default function IonGame() {
       paradoxWorld:false, paradoxJar:false, paradoxJarEquipped:false, paradoxEssence:false, paradoxRift:false,
       paradoxBlobRoom:false, paradoxGrinEncountered:false,
       ascendedWorld:false,ascendedDoor:0,ascendedOriginRoom:1,ascendedFromParadox:false,goldBarPresent:false,
+      ascendedCleared:false,winQuestArmed:false,winQuestBlob:false,winBadgeSpawned:false,
       inventory: EMPTY_INVENTORY(), basdinos: 0, basdinoModels: [],
       wardCharges: 0, speedBoostRooms: 0, banishedUntil: {},
       lastFrame: performance.now(), hudTimer: 0, footstepTimer: 0, gunKick: 0, transition: 0, transitionDirection: 0,
@@ -886,7 +895,7 @@ export default function IonGame() {
           runtime.dead=false;runtime.spawnGrace=4;runtime.running=true;showScreen(null);notify("YOUR TEAMMATE REVIVED YOU");return;
         }
         if(message.action==="door"){
-          if(runtime.doorUnlocked){runtime.doorOpening=true;runtime.audio?.pulse("door");}return;
+          if(runtime.doorUnlocked){runtime.doorOpening=true;if(runtime.ascendedWorld&&runtime.ascendedDoor===20)runtime.ascendedCleared=true;runtime.audio?.pulse("door");}return;
         }
         if(!Number.isInteger(message.id)||message.id===undefined||message.id<0)return;
         if(message.action==="pickup"){
@@ -1180,7 +1189,16 @@ export default function IonGame() {
     }
 
     function fracturePers(fromPeer=false) {
-      if(runtime.paradoxWorld||runtime.ascendedWorld||runtime.paradoxRift)return;
+      if(runtime.paradoxWorld||runtime.paradoxRift)return;
+      if(runtime.ascendedWorld){
+        if(runtime.ascendedDoor!==20||!runtime.ascendedCleared)return;
+        if(!fromPeer)partyRef.current?.send({type:"action",room:runtime.room,action:"pers"});
+        runtime.winQuestArmed=true;runtime.paradoxRift=true;
+        if(runtime.doorPers)runtime.doorPers.visible=false;
+        addParadoxRift();runtime.audio?.pulse("teleport");
+        document.body.dataset.glitch="true";window.setTimeout(()=>{delete document.body.dataset.glitch;},1800);
+        notify("FINAL PERS FRACTURED · THE *+* TEAR LEADS BACK TO THE BLOB");updateHud(true);return;
+      }
       if(!fromPeer)partyRef.current?.send({type:"action",room:runtime.room,action:"pers"});
       runtime.paradoxRift=true;
       if(runtime.persActor)runtime.persActor.visible=false;
@@ -1280,7 +1298,17 @@ export default function IonGame() {
 
     function makePickup(kind: Pickup["kind"], position: THREE.Vector3, crystal?: CrystalKey, mandatory = false) {
       let object: THREE.Group;
-      if (kind === "gold") {
+      if (kind === "neonBadge") {
+        object=new THREE.Group();
+        const star=new THREE.Shape();
+        for(let point=0;point<10;point++){const angle=-Math.PI/2+point*Math.PI/5;const radius=point%2?0.25:0.52;const x=Math.cos(angle)*radius,y=Math.sin(angle)*radius;point?star.lineTo(x,y):star.moveTo(x,y);}
+        star.closePath();
+        const medal=new THREE.Mesh(new THREE.ExtrudeGeometry(star,{depth:.12,bevelEnabled:true,bevelSize:.045,bevelThickness:.045,bevelSegments:3}),
+          new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xff29de,emissiveIntensity:4.5,metalness:.82,roughness:.1}));
+        medal.rotation.x=-Math.PI/2;object.add(medal);
+        const halo=new THREE.Mesh(new THREE.TorusGeometry(.66,.045,12,48),new THREE.MeshBasicMaterial({color:0x5effff}));halo.rotation.x=Math.PI/2;object.add(halo);
+        const light=new THREE.PointLight(0xff3fe5,20,7);light.position.y=.6;object.add(light);object.userData.secretBadge=true;
+      } else if (kind === "gold") {
         object=new THREE.Group();
         const metal=new THREE.MeshPhysicalMaterial({color:0xffc52e,metalness:1,roughness:.12,clearcoat:1,emissive:0x6b3100,emissiveIntensity:.65});
         const bar=new THREE.Mesh(new RoundedBoxGeometry(.72,.28,.38,5,.07),metal);bar.rotation.z=-.08;object.add(bar);
@@ -1449,6 +1477,10 @@ export default function IonGame() {
       runtime.ascendedWorld=restore?.ascendedWorld??runtime.ascendedWorld;
       runtime.ascendedDoor=runtime.ascendedWorld?(restore?.ascendedDoor??room):0;
       runtime.goldBarPresent=restore?.goldBarPresent??(!runtime.ascendedWorld&&goldBarSpawns(room,Math.random()));
+      runtime.ascendedCleared=restore?.ascendedCleared??false;
+      if(restore?.winQuestArmed!==undefined)runtime.winQuestArmed=restore.winQuestArmed;
+      if(restore?.winQuestBlob!==undefined)runtime.winQuestBlob=restore.winQuestBlob;
+      if(restore?.winBadgeSpawned!==undefined)runtime.winBadgeSpawned=restore.winBadgeSpawned;
       if (room > previousRoom && runtime.speedBoostRooms > 0) runtime.speedBoostRooms -= 1;
       runtime.tier = Math.min(7, Math.floor((room - 1) / 25)); runtime.roomName = roomIdentity(room);
       runtime.chaseState = runtime.paradoxWorld || runtime.ascendedWorld ? null : restore?.chaseState ?? chaseForRoom(room,runtime.chaseState,Math.random(),(runtime.banishedUntil.remetons ?? 0)>=room);
@@ -1591,6 +1623,8 @@ export default function IonGame() {
       }
       if(runtime.goldBarPresent)
         makePickup("gold",new THREE.Vector3((rand()-.5)*Math.max(3,runtime.roomWidth-6),.42,(rand()-.5)*Math.max(5,runtime.roomLength-9)));
+      if(runtime.winBadgeSpawned)
+        makePickup("neonBadge",new THREE.Vector3(0,1.05,-runtime.roomLength/2+6));
       if(room===32&&!runtime.paradoxWorld)
         makePickup("crystal",new THREE.Vector3(2.7,.35,runtime.roomLength/2-6.5),"malachite");
       if (room >= 4 && room !== 200 && (rand() < 0.62 + runtime.tier * 0.045 || room % 5 === 0)) {
@@ -1636,6 +1670,9 @@ export default function IonGame() {
       }
       if (runtime.haidIniActive) addEnemy("haidini", rand);
       if(runtime.paradoxWorld && runtime.paradoxBlobRoom && room<200 && restore?.paradoxBlobAlive!==false){addEnemy("blob",rand);runtime.enemies[runtime.enemies.length-1].speed=4.4+runtime.tier*.18;}
+      if(runtime.paradoxWorld&&runtime.winQuestBlob&&!runtime.winBadgeSpawned&&!runtime.enemies.some(enemy=>enemy.kind==="blob"&&enemy.alive)){
+        addEnemy("blob",rand);const questBlob=runtime.enemies[runtime.enemies.length-1];questBlob.speed=4.8;questBlob.object.position.set(0,0,-runtime.roomLength/2+5);
+      }
       if(runtime.paradoxWorld && restore?.paradoxGrinAlive){addEnemy("entity",rand);runtime.paradoxGrinEncountered=true;runtime.grinIncoming=false;runtime.roomEntitySpawned=true;}
       const canSpawn = (kind: EnemyKind) => !runtime.persHubActive && (runtime.banishedUntil[kind] ?? 0) < room;
       if (room > 14 && !chase && !runtime.haidIniActive && canSpawn("sound") && rand() < 0.16 + runtime.tier * 0.05) addEnemy("sound", rand);
@@ -1678,6 +1715,8 @@ export default function IonGame() {
         refreshObjective();
       }
       if(!runtime.ascendedWorld)badge("room",undefined,Math.max(0,room-(badgesRef.current.counts.room??0)));
+      if(runtime.ascendedWorld&&!restore)badge("ascended");
+      if(runtime.paradoxWorld)badge("paradox_room",undefined,Math.max(0,room-(badgesRef.current.counts.paradox_room??0)));
       refreshObjective(); updateDoorIndicator(); updateHud(true); notify(grinActive ? "7% GRIN ROLL HIT · BREACH IN 10 SECONDS" : `ROOM ${String(room).padStart(3, "0")} · ${runtime.roomName.toUpperCase()}`);
       if(runtime.paradoxWorld && room===200){
         runtime.doorUnlocked=false;runtime.doorOpening=false;
@@ -1706,7 +1745,9 @@ export default function IonGame() {
         paradoxGrinAlive:runtime.enemies.some(e=>e.kind==="entity"&&e.alive),
         paradoxBlobAlive:runtime.enemies.some(e=>e.kind==="blob"&&e.alive),
         ascendedWorld:runtime.ascendedWorld,ascendedDoor:runtime.ascendedDoor,ascendedOriginRoom:runtime.ascendedOriginRoom,
-        ascendedFromParadox:runtime.ascendedFromParadox,goldBarPresent:runtime.goldBarPresent };
+        ascendedFromParadox:runtime.ascendedFromParadox,goldBarPresent:runtime.goldBarPresent,
+        ascendedCleared:runtime.ascendedCleared,winQuestArmed:runtime.winQuestArmed,
+        winQuestBlob:runtime.winQuestBlob,winBadgeSpawned:runtime.winBadgeSpawned };
     }
     function applySave(save: SaveData) {
       runtime.chaseState = save.chaseState ?? null;
@@ -1722,6 +1763,8 @@ export default function IonGame() {
       runtime.ascendedWorld=Boolean(save.ascendedWorld);runtime.ascendedDoor=save.ascendedDoor??0;
       runtime.ascendedOriginRoom=save.ascendedOriginRoom??save.room;runtime.ascendedFromParadox=Boolean(save.ascendedFromParadox);
       runtime.goldBarPresent=Boolean(save.goldBarPresent);
+      runtime.ascendedCleared=Boolean(save.ascendedCleared);runtime.winQuestArmed=Boolean(save.winQuestArmed);
+      runtime.winQuestBlob=Boolean(save.winQuestBlob);runtime.winBadgeSpawned=Boolean(save.winBadgeSpawned);
       runtime.checkpoint = save; buildRoom(save.room,save);
     }
     function resetRun() {
@@ -1733,6 +1776,7 @@ export default function IonGame() {
       runtime.paradoxWorld=false;runtime.paradoxJar=false;runtime.paradoxJarEquipped=false;runtime.paradoxEssence=false;
       runtime.paradoxRift=false;runtime.paradoxBlobRoom=false;runtime.paradoxGrinEncountered=false;
       runtime.ascendedWorld=false;runtime.ascendedDoor=0;runtime.ascendedOriginRoom=1;runtime.ascendedFromParadox=false;runtime.goldBarPresent=false;
+      runtime.ascendedCleared=false;runtime.winQuestArmed=false;runtime.winQuestBlob=false;runtime.winBadgeSpawned=false;
       runtime.checkpoint = null;
       try { localStorage.removeItem("ion-checkpoint"); } catch { /* best effort */ }
       runtime.dead = false; runtime.won = false; buildRoom(1);
@@ -1753,8 +1797,10 @@ export default function IonGame() {
       }catch(error){setPartyStatus(error instanceof Error?error.message:"Could not host room");party.close();}
     }
     async function joinParty(code:string){
-      if(!validPartyCode(code)){setPartyStatus("Enter exactly five digits");return;}
-      try{showScreen("party");setPartyStatus("CONNECTING TO HOST…");await party.join(code);if(hasTripleDigit(code))badge("multiplayer","triple-code");setPartyStatus("CONNECTED · LOADING THE HOST'S ROOM");}
+      const normalized=code.trim().toUpperCase();const secret=secretSignal(normalized);
+      if(secret){badge("secret",secret);setPartyInput("");setPartyStatus("HIDDEN FACILITY SIGNAL ACCEPTED");return;}
+      if(!validPartyCode(normalized)){setPartyStatus("Enter a five-digit multiplayer code");return;}
+      try{showScreen("party");setPartyStatus("CONNECTING TO HOST…");await party.join(normalized);if(hasTripleDigit(normalized))badge("multiplayer","triple-code");setPartyStatus("CONNECTED · LOADING THE HOST'S ROOM");}
       catch(error){setPartyStatus(error instanceof Error?error.message:"Could not join room");party.close();}
     }
     function leaveParty(){party.close();runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;setPartyStatus("LEFT THE MULTIPLAYER ROOM");updateHud(true);}
@@ -1823,7 +1869,12 @@ export default function IonGame() {
       }
       if (hit) {
         const enemy = runtime.enemies.find((candidate) => candidate.alive && ancestorOf(hit.object, candidate.object));
-        if (enemy) { if (enemy.kind === "blob" || enemy.kind === "remetons") { notify("THE BLOB ABSORBED THE IMPACT · RUN"); }
+        if (enemy) { if (enemy.kind === "blob" && runtime.winQuestBlob) {
+            const drop=enemy.object.position.clone();removeEnemy(enemy);runtime.winQuestBlob=false;runtime.winBadgeSpawned=true;
+            makePickup("neonBadge",new THREE.Vector3(drop.x,1.05,drop.z));runtime.audio?.pulse("teleport");
+            notify("THE BLOB COLLAPSED · CLAIM THE FLOATING NEON BADGE");
+          }
+          else if (enemy.kind === "blob" || enemy.kind === "remetons") { notify("THE BLOB ABSORBED THE IMPACT · RUN"); }
           else if (enemy.kind === "noise") { notify("NOISE HAS NO PHYSICAL BODY · COLLECT FIVE SPECIMENS"); }
           else if (enemy.kind === "haidini") { notify("HAID-INI IGNORES GUNFIRE · TUNE ALL 30 RESONATORS"); }
           else if (enemy.kind === "entity") {
@@ -1863,9 +1914,13 @@ export default function IonGame() {
       } else if(pickup.kind==="gold"){
         const fromParadox=runtime.paradoxWorld;
         runtime.goldBarPresent=false;
+        badge("gold");
         badge("paradox","ascended");
         if(fromParadox)badge("paradox","ascendidox");
         beginAscended(fromParadox);return;
+      } else if(pickup.kind==="neonBadge"){
+        runtime.winBadgeSpawned=false;runtime.winQuestBlob=false;runtime.winQuestArmed=false;
+        badge("secret","win");notify("*+* BADGE CLAIMED · WIN");updateHud(true);return;
       } else if (pickup.kind === "crystal" && pickup.crystal) {
         badge("crystal",pickup.crystal);
         runtime.crystals[pickup.crystal] += 1; const first = !runtime.discovered.has(pickup.crystal); runtime.discovered.add(pickup.crystal);
@@ -1894,7 +1949,7 @@ export default function IonGame() {
     }
     function beginAscended(fromParadox:boolean){
       runtime.ascendedOriginRoom=runtime.room;runtime.ascendedFromParadox=fromParadox;
-      runtime.ascendedWorld=true;runtime.ascendedDoor=1;runtime.paradoxWorld=false;runtime.paradoxRift=false;
+      runtime.ascendedWorld=true;runtime.ascendedDoor=1;runtime.ascendedCleared=false;runtime.paradoxWorld=false;runtime.paradoxRift=false;
       runtime.chaseState=null;runtime.grinIncoming=false;
       document.body.dataset.riftfall="true";window.setTimeout(()=>{delete document.body.dataset.riftfall;},1500);
       runtime.audio?.pulse("teleport");buildRoom(1);
@@ -1903,7 +1958,7 @@ export default function IonGame() {
     function finishAscended(){
       const escapedParadox=runtime.ascendedFromParadox;
       const destination=escapedParadox?200:Math.min(199,runtime.ascendedOriginRoom+20);
-      runtime.ascendedWorld=false;runtime.ascendedDoor=0;runtime.ascendedFromParadox=false;
+      runtime.ascendedWorld=false;runtime.ascendedDoor=0;runtime.ascendedFromParadox=false;runtime.ascendedCleared=false;
       runtime.paradoxWorld=false;runtime.paradoxRift=false;runtime.paradoxBlobRoom=false;
       if(escapedParadox)badge("paradox","completed");
       document.body.dataset.riftfall="true";window.setTimeout(()=>{delete document.body.dataset.riftfall;},1500);
@@ -1918,6 +1973,13 @@ export default function IonGame() {
       if(kind==="rift"){
         if(!runtime.stations.some(s=>s.kind==="rift")){notify("NO RIFT IN THIS ROOM");return;}
         if(party.role==="guest"){party.send({type:"action",room:runtime.room,action:"rift"});notify("WAITING FOR THE HOST TO CROSS THE RIFT");return;}
+        if(runtime.ascendedWorld&&runtime.winQuestArmed){
+          runtime.ascendedWorld=false;runtime.ascendedDoor=0;runtime.paradoxWorld=true;runtime.paradoxRift=false;
+          runtime.winQuestBlob=true;runtime.winBadgeSpawned=false;runtime.chaseState=null;
+          document.body.dataset.riftfall="true";window.setTimeout(()=>{delete document.body.dataset.riftfall;},1500);
+          runtime.audio?.pulse("teleport");buildRoom(1);
+          notify("*+* TRIAL · SHOOT THE BLOB IN PARADOX");return;
+        }
         if(runtime.paradoxWorld){
           if(runtime.room!==200)return;
           if(runtime.grinIncoming||runtime.enemies.some(e=>e.kind==="entity"&&e.alive)){
@@ -1971,7 +2033,10 @@ export default function IonGame() {
         if (runtime.noiseActive || runtime.chaseRoom && !runtime.doorUnlocked) {notify("RESONANCE LOCK · COMPLETE SPECIMENS AND RESONATORS");return;}
         if (runtime.haidIniActive && runtime.activeResonators < 30) { runtime.audio?.pulse("error"); notify("HAID-INI LOCKDOWN · CRYSTAL KEYS REJECTED"); return; }
         if (!runtime.doorUnlocked && runtime.accessKeys > 0) { runtime.accessKeys -= 1; runtime.doorUnlocked = true; updateDoorIndicator(); notify("CRYSTAL KEY ACCEPTED"); }
-        if (runtime.doorUnlocked) { runtime.doorOpening = true;partyRef.current?.send({type:"action",room:runtime.room,action:"door"}); runtime.audio?.pulse("door"); runtime.objective = "Proceed to the next room"; }
+        if (runtime.doorUnlocked) { runtime.doorOpening = true;
+          if(runtime.ascendedWorld&&runtime.ascendedDoor===20){runtime.ascendedCleared=true;runtime.objective="ASCENDED CLEARED · SHOOT PERS BEFORE CROSSING FOR THE SECRET TRIAL";}
+          else runtime.objective = "Proceed to the next room";
+          partyRef.current?.send({type:"action",room:runtime.room,action:"door"}); runtime.audio?.pulse("door"); }
         else { runtime.audio?.pulse("error"); notify(runtime.objective.toUpperCase()); }
       }
     }
@@ -2082,7 +2147,7 @@ export default function IonGame() {
       runtime.pickups.forEach((pickup, index) => {
         if (!pickup.object.visible) return; const distance = pickup.object.position.distanceTo(runtime.player);
         if (distance < bestDistance) { bestDistance = distance; runtime.nearest = { kind: "pickup", index };
-          runtime.prompt = pickup.kind === "gold" ? "E  TAKE GOLD BAR · ENTER ASCENDED" : pickup.kind === "jar" ? "E  TAKE ESSENCE JAR" : pickup.kind === "crystal" && pickup.crystal ? `E  COLLECT ${CRYSTALS[pickup.crystal].label.toUpperCase()}` : `E  TAKE ${pickup.kind.toUpperCase()}`; }
+          runtime.prompt = pickup.kind === "neonBadge" ? "E  CLAIM THE FLOATING *+* BADGE" : pickup.kind === "gold" ? "E  TAKE GOLD BAR · ENTER ASCENDED" : pickup.kind === "jar" ? "E  TAKE ESSENCE JAR" : pickup.kind === "crystal" && pickup.crystal ? `E  COLLECT ${CRYSTALS[pickup.crystal].label.toUpperCase()}` : `E  TAKE ${pickup.kind.toUpperCase()}`; }
       });
       runtime.stations.forEach((station, index) => {
         const distance = station.object.position.distanceTo(runtime.player);
@@ -2438,7 +2503,7 @@ export default function IonGame() {
           </div>
         </section>
         <button className="inventory-toggle" onClick={() => actionRef.current?.openInventory()}>INVENTORY <b>{inventoryCount}</b></button>
-        <button className="badge-toggle" onClick={() => actionRef.current?.openBadges()}>BADGES <b>{hud.badgeCount}/100</b></button>
+        <button className="badge-toggle" onClick={() => actionRef.current?.openBadges()}>BADGES <b>{hud.badgeCount}/{BADGES.length}</b></button>
       {hud.partyConnected&&<div className="party-indicator">{hud.playerName} + {hud.teammateName||"CONNECTING"} · {hud.partyCode}</div>}
       {(hud.ascendedWorld||hud.paradoxWorld||hud.riftOpen)&&<div className={`paradox-indicator ${hud.ascendedWorld?"ascended-indicator":""}`}>{hud.ascendedWorld?`ASCENDED · ${String(hud.ascendedDoor).padStart(2,"0")} / 20`:hud.paradoxWorld?`PARADOX · *${String(hud.room).padStart(3,"0")} / *200`:"PERS TEAR OPEN · ENTER TO FALL"}</div>}
         <section className="hud crystal-rack" aria-label="Collected crystals">
@@ -2455,7 +2520,7 @@ export default function IonGame() {
           <span><b>7% GRIN ROLL</b> gives 10 seconds to hide</span><span><b>FLUORITE</b> is synthesized currency for Pers</span><span><b>ROOM 25×</b> starts a Blob chase · Hub at 32</span></div></div>
         <button className="primary-button" onClick={() => showScreen("saves")}>PLAY · SAVED RUNS</button>
         <button className="text-button" onClick={() => showScreen("party")}>PLAY WITH A FRIEND</button>
-        <button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/100</button>
+        <button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button>
         <div className="controls-copy">{touchCapable ? "LEFT PAD MOVE · RIGHT SIDE LOOK · USE THE ACTION BUTTONS" : "WASD MOVE · MOUSE LOOK · SPACE JUMP · CLICK FIRE · E INTERACT · F LIGHT · SHIFT RUN"}</div>
         <small className={`headphones ${webglUnavailable ? "danger" : ""}`}>{webglUnavailable ? "ION REQUIRES WEBGL 2 · OPEN ON A DEVICE WITH 3D GRAPHICS ENABLED" : assetProgress < 100 ? `PREPARING FACILITY · ${assetProgress}%` : "HEADPHONES RECOMMENDED · ONE-TOUCH DEATH · CHECKPOINTS EVERY 25 ROOMS"}</small>
       </section>}
@@ -2475,13 +2540,13 @@ export default function IonGame() {
           </footer>
         </div>
       </section>}
-      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyCode||"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/100</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
+      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyCode||"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
       {screen === "dead" && <section className="death-screen creature-death overlay-panel compact-panel" data-scare={hud.deathKind} style={{"--scare-color":`#${MONSTER_COLORS[hud.deathKind].toString(16).padStart(6,"0")}`} as React.CSSProperties}><div className="scare-distortion" aria-hidden="true" /><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>{MONSTER_NAMES[hud.deathKind]}</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div>{hud.partyConnected&&<p>YOUR TEAMMATE CAN REVIVE YOU NEARBY</p>}<button className="primary-button danger-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.restartCheckpoint();}}>RETURN TO CHECKPOINT SOLO</button><button className="text-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.start(true);}}>NEW DESCENT</button></div></section>}
       {screen === "saves" && <MenuShell title="SAVED RUNS" subtitle="Three independent local slots · rooms save automatically when entered" onClose={() => showScreen("start")}><div className="save-grid">
         {savedRuns.map((slot,index)=><article className="save-card" key={index}><small>SLOT {index+1}</small><strong>{slot?`ROOM ${String(slot.state.room).padStart(3,"0")}`:"EMPTY SLOT"}</strong><p>{slot?`Saved ${new Date(slot.savedAt).toLocaleString()} · ${slot.state.discovered?.length??0}/7 minerals`:"Start a new descent and save automatically."}</p>{slot&&<button onClick={()=>actionRef.current?.loadSlot(index)}>CONTINUE RUN</button>}<button className="secondary" onClick={()=>actionRef.current?.startNewSlot(index)}>{slot?"NEW RUN IN THIS SLOT":"START NEW RUN"}</button></article>)}
       </div></MenuShell>}
-      {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle={`You are ${hud.playerName} · two players · real-time WebRTC`} onClose={() => {if(runtimeRef.current?.room===1&&!partyRef.current?.code)showScreen("start");else showScreen("pause");}}><div className="party-panel"><p>{partyStatus}</p>{hud.partyCode&&<><div className="party-code">{hud.partyCode}</div><p>{hud.playerName}{hud.teammateName?` + ${hud.teammateName}`:" · WAITING FOR A NAMED SURVIVOR"}</p></>}<button onClick={() => void actionRef.current?.hostParty()} disabled={Boolean(hud.partyCode)}>HOST A ROOM</button><label htmlFor="ion-party-code">JOIN A FRIEND</label><div className="party-join"><input id="ion-party-code" inputMode="numeric" maxLength={5} pattern="[0-9]{5}" value={partyInput} onChange={event=>setPartyInput(event.target.value.replace(/\D/g,"").slice(0,5))} placeholder="5-digit code" /><button disabled={!validPartyCode(partyInput)} onClick={()=>void actionRef.current?.joinParty(partyInput)}>JOIN ROOM</button></div><p className="party-note">Every player receives a random facility name. A code containing three matching digits awards an XtraUltra badge.</p>{hud.partyCode&&<button className="secondary" onClick={()=>{actionRef.current?.leaveParty();showScreen("pause");}}>LEAVE PARTY</button>}{hud.partyCode&&<button onClick={()=>actionRef.current?.resume()}>RETURN TO GAME</button>}</div></MenuShell>}
-      {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/100 unlocked · XtraUltra records include one secret`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-grid">{BADGES.map(b=>{const earned=badgeProgress.unlocked.includes(b.id);const rarity=b.rarity??"standard";return <article key={b.id} className={`${earned?"earned":"locked"} badge-${rarity}`}><span>{earned?"★ EARNED":"◇ LOCKED"} · {rarity.toUpperCase()}</span><strong>{b.title}</strong><p>{b.description}</p>{b.tutorial&&<small>FIELD TUTORIAL: {b.tutorial}</small>}</article>})}</div></MenuShell>}
+      {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle={`You are ${hud.playerName} · two players · real-time WebRTC`} onClose={() => {if(runtimeRef.current?.room===1&&!partyRef.current?.code)showScreen("start");else showScreen("pause");}}><div className="party-panel"><p>{partyStatus}</p>{hud.partyCode&&<><div className="party-code">{hud.partyCode}</div><p>{hud.playerName}{hud.teammateName?` + ${hud.teammateName}`:" · WAITING FOR A NAMED SURVIVOR"}</p></>}<button onClick={() => void actionRef.current?.hostParty()} disabled={Boolean(hud.partyCode)}>HOST A ROOM</button><label htmlFor="ion-party-code">JOIN A FRIEND</label><div className="party-join"><input id="ion-party-code" inputMode="text" maxLength={6} value={partyInput} onChange={event=>setPartyInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,6))} placeholder="ROOM CODE" /><button disabled={!validPartyCode(partyInput)&&!secretSignal(partyInput)} onClick={()=>void actionRef.current?.joinParty(partyInput)}>ENTER</button></div><p className="party-note">Keep the host page open until the second randomized survivor name appears. Cross-network connections use multiple encrypted WebRTC routes automatically.</p>{hud.partyCode&&<button className="secondary" onClick={()=>{actionRef.current?.leaveParty();showScreen("pause");}}>LEAVE PARTY</button>}{hud.partyCode&&<button onClick={()=>actionRef.current?.resume()}>RETURN TO GAME</button>}</div></MenuShell>}
+      {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/${BADGES.length} unlocked · 40% have no field tutorial`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-grid">{BADGES.map(b=>{const earned=badgeProgress.unlocked.includes(b.id);const rarity=b.rarity??"standard";const classified=rarity==="starplus"&&!earned;const rarityLabel=rarity==="starplus"?"*+*":rarity.toUpperCase();return <article key={b.id} className={`${earned?"earned":"locked"} badge-${rarity}`}><span>{earned?"★ EARNED":"◇ LOCKED"} · {rarityLabel}</span><strong>{classified?"CLASSIFIED":b.title}</strong><p>{classified?"This badge can only be given by a secret facility condition.":b.description}</p>{!classified&&b.tutorial&&<small>FIELD TUTORIAL: {b.tutorial}</small>}</article>})}</div></MenuShell>}
       {screen === "win" && <section className="win-screen overlay-panel"><span className="eyebrow">EXTRACTION ROOM · SIGNAL RESTORED</span><h2>YOU REACHED<br /><strong>ROOM 200</strong></h2><p>Every infusion is stable. The blast doors open. Something below them keeps smiling.</p><div className="completion-ring" style={{ "--completion": `${discoveredPercent}%` } as React.CSSProperties}><span>7 / 7</span><small>INFUSIONS</small></div><button className="primary-button" onClick={() => actionRef.current?.start(true)}>DESCEND AGAIN</button><button className="text-button" onClick={() => actionRef.current?.exploreExtraction()}>EXPLORE EXTRACTION</button></section>}
       {screen === "crafter" && <MenuShell title="CRYSTAL CRAFTER" subtitle="Convert finite specimens into survival equipment" onClose={() => actionRef.current?.close()}><div className="recipe-grid">
         <Recipe name="Toxic rounds ×4" cost="1 MAL" note="Restores rifle ammunition" onClick={() => actionRef.current?.craft("ammo")} />

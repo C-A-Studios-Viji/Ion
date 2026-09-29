@@ -39,11 +39,12 @@ function gameHarness(){
   return {runtime,act,step,enter,useAt,load,saved};
 }
 
-test('two Fluorite per Infusionsmith batch, up to four rarer crawlers, 100 persistent badges and three save slots',async()=>{
+test('two Fluorite per Infusionsmith batch, up to four rarer crawlers, 125 persistent badges and three save slots',async()=>{
   const h=gameHarness();await Promise.resolve();await Promise.resolve();
   const progression=h.load(path.join(root,'app/progression.ts'));
-  assert.equal(progression.BADGES.length,100);
-  assert.equal(new Set(progression.BADGES.map(b=>b.id)).size,100);
+  assert.equal(progression.BADGES.length,125);
+  assert.equal(new Set(progression.BADGES.map(b=>b.id)).size,125);
+  assert.equal(progression.TUTORIALLESS_BADGE_COUNT,50);
   const allRolls=(...values)=>{let i=0;return()=>values[i++]};
   assert.equal(progression.rollCrawlerPack(allRolls(.99),0),0);
   assert.equal(progression.rollCrawlerPack(allRolls(0,.99),0),1);
@@ -161,7 +162,7 @@ test('Pers tear, prime-door Gold, Ascendidox and the 20-door shortcut are playab
   assert.equal(rules.paradoxEncounter(26,.07),null);
   assert.equal(rules.isPrimeDoor(2),true);assert.equal(rules.isPrimeDoor(97),true);
   assert.equal(rules.isPrimeDoor(1),false);assert.equal(rules.isPrimeDoor(99),false);
-  assert.equal(rules.goldBarSpawns(97,.139999),true);assert.equal(rules.goldBarSpawns(97,.14),false);
+  assert.equal(rules.goldBarSpawns(97,.013999),true);assert.equal(rules.goldBarSpawns(97,.014),false);
   assert.equal(rules.goldBarSpawns(99,0),false);
   h.enter(32);let r=h.runtime;
   assert(r.persActor?.visible);
@@ -189,8 +190,38 @@ test('Pers tear, prime-door Gold, Ascendidox and the 20-door shortcut are playab
   progress=JSON.parse(h.saved.get('ion-badges-v1'));assert(progress.unlocked.includes('paradox-conqueror'));
   const catalog=h.load(path.join(root,'app/progression.ts')).BADGES;
   const progression=h.load(path.join(root,'app/progression.ts'));
-  assert.equal(catalog.length,100);assert.equal(catalog.find(b=>b.id==='ascendidox').tutorial,undefined);
+  assert.equal(catalog.length,125);assert.equal(catalog.find(b=>b.id==='ascendidox').tutorial,undefined);
   assert.equal(catalog.find(b=>b.id==='ascendidox').rarity,'xtraultra');
   const codeProgress=progression.emptyBadgeProgress();
   assert(progression.awardBadges(codeProgress,'multiplayer','triple-code').some(b=>b.id==='triple-signal'));
+});
+
+test('*+* Win requires cleared Ascended 20, Pers, the Paradox Blob and the neon drop',async()=>{
+  const h=gameHarness();await Promise.resolve();await Promise.resolve();const r=h.runtime;
+  const state={room:20,chaseState:null,ammo:6,battery:100,
+    crystals:{malachite:0,amethyst:0,quartz:0,obsidian:0,citrine:0,fluorite:0,corrupted:0},
+    discovered:[],gunInfusion:null,lightInfusion:null,accessKeys:10,maxAmmo:8,
+    paradoxWorld:false,ascendedWorld:true,ascendedDoor:20,ascendedOriginRoom:2,ascendedFromParadox:true,goldBarPresent:false};
+  h.saved.set('ion-checkpoint',JSON.stringify(state));r.room=20;r.checkpoint=null;h.act.restartCheckpoint();
+  r.noiseActive=false;r.doorUnlocked=true;r.nearest={kind:'door'};h.act.interact();assert.equal(r.ascendedCleared,true);h.step(.1);
+  assert(r.doorPers?.visible);
+  r.roomGroup.updateMatrixWorld(true);const persCenter=new THREE.Box3().setFromObject(r.doorPers).getCenter(new THREE.Vector3());
+  r.camera.position.copy(persCenter).add(new THREE.Vector3(0,.1,4));r.camera.lookAt(persCenter);r.camera.updateMatrixWorld(true);
+  h.act.fire();assert.equal(r.winQuestArmed,true);assert.equal(r.paradoxRift,true);
+  const rift=r.stations.find(s=>s.kind==='rift');assert(rift);h.useAt(rift.object);
+  assert.equal(r.paradoxWorld,true);assert.equal(r.winQuestBlob,true);assert.equal(r.room,1);
+  const blob=r.enemies.find(e=>e.kind==='blob'&&e.alive);assert(blob);r.roomGroup.updateMatrixWorld(true);
+  const blobCenter=new THREE.Box3().setFromObject(blob.object).getCenter(new THREE.Vector3());
+  r.camera.position.copy(blobCenter).add(new THREE.Vector3(0,.2,4));r.camera.lookAt(blobCenter);r.camera.updateMatrixWorld(true);
+  h.act.fire();assert.equal(blob.alive,false);const medal=r.pickups.find(p=>p.kind==='neonBadge');assert(medal);
+  h.useAt(medal.object);const progress=JSON.parse(h.saved.get('ion-badges-v1'));
+  assert(progress.unlocked.includes('win'));assert.equal(r.winQuestArmed,false);assert.equal(r.winBadgeSpawned,false);
+});
+
+test('secret join signals award classified *+* badges without opening multiplayer',async()=>{
+  const h=gameHarness();await Promise.resolve();await Promise.resolve();
+  await h.act.joinParty('XXOOP');await h.act.joinParty('1dev1');
+  const progress=JSON.parse(h.saved.get('ion-badges-v1'));
+  assert(progress.unlocked.includes('better-skip-pers'));
+  assert(progress.unlocked.includes('one-dev-one-badge'));
 });

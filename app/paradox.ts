@@ -18,5 +18,5 @@ export function isPrimeDoor(room:number):boolean {
 }
 
 export function goldBarSpawns(room:number,roll:number):boolean {
-  return isPrimeDoor(room) && roll<.14;
+  return isPrimeDoor(room) && roll<.014;
 }
