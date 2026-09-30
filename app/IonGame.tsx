@@ -1818,7 +1818,12 @@ export default function IonGame() {
       const codedBadge=badgeFromCode(normalized);
       if(!codedBadge){notify("BADGE CODE NOT RECOGNISED");return;}
       if(badgesRef.current.unlocked.includes(codedBadge.id)){notify("BADGE ALREADY UNLOCKED");return;}
-      badge(codedBadge.event,codedBadge.detail);setBadgeInput("");
+      // A badge code is an explicit grant, so it must unlock the requested record
+      // directly instead of waiting for its normal progress threshold.
+      badgesRef.current.unlocked.push(codedBadge.id);
+      setBadgeProgress({...badgesRef.current,unlocked:[...badgesRef.current.unlocked]});
+      try{localStorage.setItem("ion-badges-v1",JSON.stringify(badgesRef.current));}catch{/* best effort */}
+      setBadgeInput("");notify(`BADGE UNLOCKED · ${codedBadge.title.toUpperCase()}`);
     }
     function leaveParty(){party.close();runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;setPartyStatus("LEFT THE MULTIPLAYER ROOM");updateHud(true);}
     function openBadges(){badgeReturnRef.current=screenRef.current;runtime.running=false;showScreen("badges");if(document.pointerLockElement)document.exitPointerLock();}

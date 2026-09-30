@@ -232,6 +232,8 @@ test('ordinary badges each have a unique ION code while *+* stays classified',()
   assert.equal(codes.length,122);assert.equal(new Set(codes).size,122);
   assert.equal(p.badgeFromCode('ION001').id,p.BADGES[0].id);
   assert.equal(p.badgeCode('win'),null);assert.equal(p.badgeFromCode('ION999'),null);
+  h.act.redeemBadgeCode('ION001');
+  assert(JSON.parse(h.saved.get('ion-badges-v1')).unlocked.includes('room-2'));
 });
 
 test('Pers Hub guarantees Citrine and Obsidian specimens',async()=>{
