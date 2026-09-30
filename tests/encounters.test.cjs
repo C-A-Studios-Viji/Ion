@@ -225,3 +225,17 @@ test('secret join signals award classified *+* badges without opening multiplaye
   assert(progress.unlocked.includes('better-skip-pers'));
   assert(progress.unlocked.includes('one-dev-one-badge'));
 });
+
+test('ordinary badges each have a unique ION code while *+* stays classified',()=>{
+  const h=gameHarness();const p=h.load(path.join(root,'app/progression.ts'));
+  const codes=p.BADGES.filter(b=>b.rarity!=='starplus').map(b=>p.badgeCode(b.id));
+  assert.equal(codes.length,122);assert.equal(new Set(codes).size,122);
+  assert.equal(p.badgeFromCode('ION001').id,p.BADGES[0].id);
+  assert.equal(p.badgeCode('win'),null);assert.equal(p.badgeFromCode('ION999'),null);
+});
+
+test('Pers Hub guarantees Citrine and Obsidian specimens',async()=>{
+  const h=gameHarness();await Promise.resolve();await Promise.resolve();h.enter(32);
+  const crystals=h.runtime.pickups.filter(p=>p.kind==='crystal').map(p=>p.crystal);
+  assert(crystals.includes('citrine'));assert(crystals.includes('obsidian'));
+});

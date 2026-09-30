@@ -37,6 +37,8 @@ body[data-ascended="true"] .ion-canvas {filter:sepia(.16) saturate(1.35) brightn
 body[data-ascended="true"] .hud-top-left .eyebrow,body[data-ascended="true"] .interaction-prompt {color:#ffe887;text-shadow:0 0 14px #ffb300}
 body[data-riftfall="true"] .ion-canvas {animation:rift-fall 1.45s cubic-bezier(.2,.7,.1,1) both}
 body[data-riftfall="true"] .vignette {animation:rift-collapse 1.45s ease-in both}
+body[data-extraction="true"] .ion-canvas {animation:extraction-flight 2.6s cubic-bezier(.18,.75,.1,1) both}
+body[data-extraction="true"] .vignette {animation:extraction-vignette 2.6s ease-in both}
 .paradox-indicator {position:fixed;right:20px;top:338px;z-index:7;max-width:min(38vw,280px);border:1px solid #e58aff88;border-radius:9px;padding:9px 12px;background:#1a062ae8;color:#ffe2ff;box-shadow:0 0 20px #bb55ff55;font-size:10px;letter-spacing:.1em;pointer-events:none}
 .paradox-indicator.ascended-indicator {border-color:#ffe26e;background:#2b1c03e8;color:#fff4b0;box-shadow:0 0 24px #ffc21f66}
 .essence-jar {border-color:#a9eeff!important;background:linear-gradient(135deg,#143952,#43175b)!important}
@@ -372,4 +374,6 @@ body[data-riftfall="true"] .vignette {animation:rift-collapse 1.45s ease-in both
 @keyframes badge-iridescence {to {background-position:220% center}}
 @keyframes rift-fall {0%{transform:scale(1);filter:brightness(1)}35%{transform:scale(1.18) translateY(-2%);filter:contrast(1.8) hue-rotate(45deg)}100%{transform:scale(.08) translateY(420%);filter:brightness(0)}}
 @keyframes rift-collapse {0%{box-shadow:inset 0 0 12vw 3vw #8d35ff44}100%{box-shadow:inset 0 0 45vw 28vw #000}}
+@keyframes extraction-flight {0%{transform:scale(1);filter:brightness(1) saturate(1)}42%{transform:scale(1.04) translateY(-1%);filter:brightness(1.9) saturate(1.5) hue-rotate(12deg)}100%{transform:scale(.03) translateY(-38%);filter:brightness(3) saturate(.2) blur(3px)}}
+@keyframes extraction-vignette {0%{box-shadow:inset 0 0 16vw 5vw #0008}55%{box-shadow:inset 0 0 28vw 12vw #d9fff944}100%{box-shadow:inset 0 0 45vw 32vw #fff}}
 @media(max-width:760px){.badge-toggle{right:14px;top:263px}.party-indicator{right:14px;top:303px}.save-grid{grid-template-columns:1fr}.badge-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.party-panel{padding:10px}}

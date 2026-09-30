@@ -55,6 +55,18 @@ for(const badge of tutorialPriority){if(tutoriallessIds.size>=BADGES.length*.4)b
 BADGES.forEach(b=>{if(tutoriallessIds.has(b.id))delete b.tutorial;else if(!b.tutorial)b.tutorial=b.description;});
 export const TUTORIALLESS_BADGE_COUNT=BADGES.filter(b=>!b.tutorial).length;
 
+// Ordinary badges have compact deterministic facility codes. Classified *+* badges
+// remain tied to their secret gameplay conditions and intentionally have no code.
+export function badgeCode(badgeId: string): string | null {
+  const badge = BADGES.find(b => b.id === badgeId);
+  if (!badge || badge.rarity === "starplus") return null;
+  return `ION${String(BADGES.indexOf(badge) + 1).padStart(3, "0")}`;
+}
+export function badgeFromCode(code: string): Badge | null {
+  const normalized = code.trim().toUpperCase();
+  return BADGES.find(b => badgeCode(b.id) === normalized) ?? null;
+}
+
 export type BadgeProgress = { unlocked: string[]; counts: Partial<Record<BadgeEvent, number>>; detailCounts: Record<string, number> };
 export const emptyBadgeProgress = (): BadgeProgress => ({unlocked:[],counts:{},detailCounts:{}});
 /** Roll the first crawler, then give each additional crawler a smaller conditional chance. */

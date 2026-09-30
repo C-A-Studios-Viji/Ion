@@ -8,7 +8,7 @@ import { blobChaseSpeed, chaseForRoom, chaseRoomRules, exitRequirements, type Ch
 import { gradientMaterial, smoothNormals } from "./surfaceStyle";
 import { HorrorAudio } from "./horrorAudio";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { BADGES, awardBadges, emptyBadgeProgress, readRunSlots, writeRunSlot, rollCrawlerPack, type BadgeEvent, type BadgeProgress, type RunSlot } from "./progression";
+import { BADGES, awardBadges, badgeFromCode, emptyBadgeProgress, readRunSlots, writeRunSlot, rollCrawlerPack, type BadgeEvent, type BadgeProgress, type RunSlot } from "./progression";
 import { PartyLink, hasTripleDigit, secretSignal, validPartyCode, type PartyMessage, type Pose } from "./multiplayer";
 import { goldBarSpawns, paradoxEncounter } from "./paradox";
 
@@ -253,6 +253,7 @@ type Runtime = {
   remoteAvatar: THREE.Group | null;
   remotePose: Pose | null;
   networkTimer: number;
+  exiting: boolean;
 };
 
 type SaveData = {
@@ -824,7 +825,7 @@ export default function IonGame() {
       wardCharges: 0, speedBoostRooms: 0, banishedUntil: {},
       lastFrame: performance.now(), hudTimer: 0, footstepTimer: 0, gunKick: 0, transition: 0, transitionDirection: 0,
       gunModel, clock: new THREE.Clock(), audio: null, checkpoint: null,
-      removedPickups: new Set(), remoteAvatar: null, remotePose: null, networkTimer: 0,
+      removedPickups: new Set(), remoteAvatar: null, remotePose: null, networkTimer: 0, exiting: false,
     };
     runtimeRef.current = runtime;
     const party = new PartyLink();partyRef.current=party;
@@ -1627,6 +1628,10 @@ export default function IonGame() {
         makePickup("neonBadge",new THREE.Vector3(0,1.05,-runtime.roomLength/2+6));
       if(room===32&&!runtime.paradoxWorld)
         makePickup("crystal",new THREE.Vector3(2.7,.35,runtime.roomLength/2-6.5),"malachite");
+      if(runtime.persHubActive){
+        makePickup("crystal",new THREE.Vector3(-2.35,.35,-runtime.roomLength/2+5.5),"citrine");
+        makePickup("crystal",new THREE.Vector3(2.35,.35,-runtime.roomLength/2+5.5),"obsidian");
+      }
       if (room >= 4 && room !== 200 && (rand() < 0.62 + runtime.tier * 0.045 || room % 5 === 0)) {
         const whirlpoolCount = Math.min(3, 1 + Math.floor(runtime.tier / 3));
         for (let i = 0; i < whirlpoolCount; i += 1) {
@@ -1799,6 +1804,8 @@ export default function IonGame() {
     async function joinParty(code:string){
       const normalized=code.trim().toUpperCase();const secret=secretSignal(normalized);
       if(secret){badge("secret",secret);setPartyInput("");setPartyStatus("HIDDEN FACILITY SIGNAL ACCEPTED");return;}
+      const codedBadge=badgeFromCode(normalized);
+      if(codedBadge){badge(codedBadge.event,codedBadge.detail);setPartyInput("");setPartyStatus(`BADGE SIGNAL ACCEPTED · ${codedBadge.title.toUpperCase()}`);return;}
       if(!validPartyCode(normalized)){setPartyStatus("Enter a five-digit multiplayer code");return;}
       try{showScreen("party");setPartyStatus("CONNECTING TO HOST…");await party.join(normalized);if(hasTripleDigit(normalized))badge("multiplayer","triple-code");setPartyStatus("CONNECTED · LOADING THE HOST'S ROOM");}
       catch(error){setPartyStatus(error instanceof Error?error.message:"Could not join room");party.close();}
@@ -1965,6 +1972,17 @@ export default function IonGame() {
       runtime.audio?.pulse("teleport");buildRoom(destination);
       notify(escapedParadox?"ASCENDIDOX COMPLETE · PARADOX ESCAPED":"ASCENDED COMPLETE · FACILITY SIGNAL RESTORED");
     }
+    function escapeToHome(){
+      if(runtime.exiting)return;
+      runtime.exiting=true;runtime.running=false;runtime.doorOpening=true;runtime.audio?.pulse("teleport");
+      badge("paradox","completed");document.body.dataset.extraction="true";
+      notify("EXTRACTION SIGNAL · RETURNING TO HOME");updateHud(true);
+      window.setTimeout(()=>{
+        delete document.body.dataset.extraction;runtime.exiting=false;runtime.dead=false;runtime.won=false;
+        runtime.doorOpening=false;runtime.paradoxWorld=false;runtime.paradoxRift=false;runtime.ascendedWorld=false;
+        showScreen("start");updateHud(true);
+      },2600);
+    }
     function advanceDimension(){
       if(runtime.ascendedWorld&&runtime.ascendedDoor>=20){finishAscended();return;}
       buildRoom(runtime.room+1);
@@ -2029,7 +2047,10 @@ export default function IonGame() {
       if (nearest.kind === "station" && nearest.index !== undefined) { const station = runtime.stations[nearest.index]; if (station){if(station.kind==="resonator"&&!station.activated)partyRef.current?.send({type:"action",room:runtime.room,action:"resonator",id:nearest.index});openStation(station.kind, station);} }
       if(nearest.kind==="teammate" && runtime.remotePose?.dead){partyRef.current?.send({type:"action",room:runtime.room,action:"revive"});runtime.remotePose.dead=false;badge("revive");notify("TEAMMATE REVIVED");}
       if (nearest.kind === "door") {
-        if(runtime.room===200){notify(runtime.paradoxWorld?"THE RETURN RIFT IS YOUR ONLY EXIT":"EXTRACTION CHAMBER · NO FURTHER DOORS");return;}
+        if(runtime.room===200){
+          if(!runtime.paradoxWorld){escapeToHome();return;}
+          notify("THE RETURN RIFT IS YOUR ONLY EXIT");return;
+        }
         if (runtime.noiseActive || runtime.chaseRoom && !runtime.doorUnlocked) {notify("RESONANCE LOCK · COMPLETE SPECIMENS AND RESONATORS");return;}
         if (runtime.haidIniActive && runtime.activeResonators < 30) { runtime.audio?.pulse("error"); notify("HAID-INI LOCKDOWN · CRYSTAL KEYS REJECTED"); return; }
         if (!runtime.doorUnlocked && runtime.accessKeys > 0) { runtime.accessKeys -= 1; runtime.doorUnlocked = true; updateDoorIndicator(); notify("CRYSTAL KEY ACCEPTED"); }
