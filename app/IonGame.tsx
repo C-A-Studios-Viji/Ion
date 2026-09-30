@@ -1881,6 +1881,10 @@ export default function IonGame() {
             makePickup("neonBadge",new THREE.Vector3(drop.x,1.05,drop.z));runtime.audio?.pulse("teleport");
             notify("THE BLOB COLLAPSED · CLAIM THE FLOATING NEON BADGE");
           }
+          else if (enemy.kind === "blob" && runtime.paradoxWorld) {
+            removeEnemy(enemy);runtime.paradoxBlobRoom=false;runtime.banishedUntil.blob=runtime.room+1;
+            runtime.audio?.pulse("teleport");notify("PARADOX BLOB DISPERSED · SIGNAL CLEAR");
+          }
           else if (enemy.kind === "blob" || enemy.kind === "remetons") { notify("THE BLOB ABSORBED THE IMPACT · RUN"); }
           else if (enemy.kind === "noise") { notify("NOISE HAS NO PHYSICAL BODY · COLLECT FIVE SPECIMENS"); }
           else if (enemy.kind === "haidini") { notify("HAID-INI IGNORES GUNFIRE · TUNE ALL 30 RESONATORS"); }
