@@ -229,10 +229,11 @@ test('secret join signals award classified *+* badges without opening multiplaye
 test('ordinary badges each have a unique ION code while *+* stays classified',()=>{
   const h=gameHarness();const p=h.load(path.join(root,'app/progression.ts'));
   const codes=p.BADGES.filter(b=>b.rarity!=='starplus').map(b=>p.badgeCode(b.id));
+  assert.equal(p.encodeBadgeCode('ION101'),'uaz131213');assert.equal(p.badgeFromCode('ION001'),null);
   assert.equal(codes.length,122);assert.equal(new Set(codes).size,122);
-  assert.equal(p.badgeFromCode('ION001').id,p.BADGES[0].id);
+  assert.equal(p.badgeFromCode('uaz121213').id,p.BADGES[0].id);
   assert.equal(p.badgeCode('win'),null);assert.equal(p.badgeFromCode('ION999'),null);
-  h.act.redeemBadgeCode('ION001');
+  h.act.redeemBadgeCode('uaz121213');
   assert(JSON.parse(h.saved.get('ion-badges-v1')).unlocked.includes('room-2'));
 });
 
@@ -240,4 +241,31 @@ test('Pers Hub guarantees Citrine and Obsidian specimens',async()=>{
   const h=gameHarness();await Promise.resolve();await Promise.resolve();h.enter(32);
   const crystals=h.runtime.pickups.filter(p=>p.kind==='crystal').map(p=>p.crystal);
   assert(crystals.includes('citrine'));assert(crystals.includes('obsidian'));
+});
+
+test('cabinet loot is collected once, persists, and bottles scoop blood into a fifty-door skip',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.enter(10);
+ const r=h.runtime;r.enemies.forEach(e=>e.alive=false);
+ const cabinet=r.stations.find(s=>s.kind==='cabinet');assert(cabinet);
+ cabinet.object.userData.loot={bottle:1,pearl:1,resonationShield:1,goldBar:0};
+ h.useAt(cabinet.object);assert.equal(r.inventory.bottle,1);assert.equal(r.inventory.pearl,1);
+ r.nearest={kind:'station',index:r.stations.indexOf(cabinet)};h.act.interact();assert.equal(r.inventory.bottle,1);
+ h.act.saveRun();assert.equal(h.load(path.join(root,'app/progression.ts')).readRunSlots({getItem:k=>h.saved.get(k)??null})[0].state.openedCabinets.length,1);
+ const pool=r.stations.find(s=>s.kind==='blood');assert(pool);r.player.copy(pool.object.position).setY(1.65);
+ h.act.useItem('bottle');assert.equal(r.inventory.bottle,0);assert.equal(r.inventory.sang,1);
+ h.act.useItem('sang');assert.equal(r.room,60);assert.equal(r.inventory.sang,0);
+ r.inventory.sang=1;r.paradoxWorld=true;h.act.useItem('sang');assert.equal(r.room,110);assert.equal(r.paradoxWorld,true);
+ r.ascendedWorld=true;r.ascendedDoor=3;r.ascendedFromParadox=false;r.ascendedOriginRoom=10;r.paradoxWorld=false;r.inventory.sang=1;
+ h.act.useItem('sang');assert.equal(r.ascendedWorld,false);assert.equal(r.room,30);
+});
+
+test('shielded resonators require reusable protection and their room cabinet supplies it',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();
+ let shielded;
+ for(let room=7;room<200&&!shielded;room+=7){h.enter(room);shielded=h.runtime.stations.find(s=>s.needsShield);}
+ assert(shielded);const r=h.runtime;r.enemies.forEach(e=>e.alive=false);
+ r.nearest={kind:'station',index:r.stations.indexOf(shielded)};h.act.interact();assert.equal(shielded.activated,false);
+ const cabinet=r.stations.find(s=>s.kind==='cabinet');assert.equal(cabinet.object.userData.loot.resonationShield,1);
+ h.useAt(cabinet.object);r.nearest={kind:'station',index:r.stations.indexOf(shielded)};h.act.interact();
+ assert.equal(shielded.activated,true);assert.equal(r.inventory.resonationShield,1);
 });

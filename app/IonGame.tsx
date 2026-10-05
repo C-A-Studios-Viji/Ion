@@ -21,7 +21,7 @@ type CrystalKey =
   | "fluorite"
   | "corrupted";
 
-type ItemKey = "soul" | "royalBattery" | "obsidianMagazine" | "citrineRush" | "persKey" | "crystalWard";
+type ItemKey = "bottle" | "sang" | "pearl" | "goldBar" | "resonationShield" | "soul" | "royalBattery" | "obsidianMagazine" | "citrineRush" | "persKey" | "crystalWard";
 type EnemyKind = MonsterKind;
 
 type Screen =
@@ -110,8 +110,9 @@ type Pickup = {
 
 type Station = {
   object: THREE.Group;
-  kind: "crafter" | "infusionsmith" | "archive" | "resonator" | "trapdoor" | "pershub" | "rift";
+  kind: "crafter" | "infusionsmith" | "archive" | "resonator" | "trapdoor" | "pershub" | "rift" | "cabinet" | "blood";
   activated?: boolean;
+  needsShield?: boolean;
 };
 
 type Enemy = {
@@ -274,6 +275,7 @@ type SaveData = {
   banishedUntil?: Partial<Record<EnemyKind, number>>;
   removedPickups?: number[];
   activatedResonators?: number[];
+  openedCabinets?: number[];
   mandatoryCollected?: boolean;
   noiseCount?: number;
   noiseTime?: number;
@@ -351,10 +353,16 @@ const CRYSTAL_KEYS: CrystalKey[] = [
 const FOUND_CRYSTAL_KEYS: CrystalKey[] = CRYSTAL_KEYS.filter((key) => key !== "fluorite");
 
 const EMPTY_INVENTORY = (): Record<ItemKey, number> => ({
+  bottle: 0, sang: 0, pearl: 0, goldBar: 0, resonationShield: 0,
   soul: 0, royalBattery: 0, obsidianMagazine: 0, citrineRush: 0, persKey: 0, crystalWard: 0,
 });
 
 const ITEMS: Record<ItemKey, { label: string; note: string; color: string }> = {
+  bottle: { label: "Empty Bottle", note: "Only found in storage cabinets (4%). Use beside a floor blood pool to scoop a Vial of Sáng.", color: "#9ccfff" },
+  sang: { label: "Vial of Sáng", note: "Consume to skip 50 doors in your current dimension. Ascended ends at Door 20.", color: "#ff3355" },
+  pearl: { label: "Pearl", note: "Crush to restore 25 flashlight battery.", color: "#eeeaff" },
+  goldBar: { label: "Gold Bar", note: "Use to enter Ascended. Finding one in Paradox grants Ascendidox.", color: "#ffd477" },
+  resonationShield: { label: "Resonation Shield", note: "Reusable protection required to tune shielded resonators. Keep it in your inventory.", color: "#7affd6" },
   soul: { label: "Soul of Sadist", note: "Choose one entity class to banish for 15 rooms.", color: "#ff3159" },
   royalBattery: { label: "Royal Battery", note: "Instantly restores the luxury flashlight to full charge.", color: "#ffe5a4" },
   obsidianMagazine: { label: "Obsidian Magazine", note: "Loads six armour-piercing rounds.", color: "#9b86c4" },
@@ -1009,6 +1017,9 @@ export default function IonGame() {
       for (let i = 0; i < floorCount; i += 1) {
         const centerX = (rand() - 0.5) * (runtime.roomWidth - 4);
         const centerZ = (rand() - 0.5) * (runtime.roomLength - 5);
+        const blood = new THREE.Group(); blood.position.set(centerX, 0, centerZ);
+        blood.userData.bloodPool = true; runtime.roomGroup.add(blood);
+        runtime.stations.push({object:blood, kind:"blood"});
         const blotCount = 3 + Math.floor(rand() * 5);
         for (let blot = 0; blot < blotCount; blot += 1) {
           const radius = (0.11 + rand() * 0.5) * (severeRoom ? 1.25 : 1);
@@ -1117,6 +1128,20 @@ export default function IonGame() {
       const base = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.52, 0.32, 8), casing); base.position.y = 0.16; group.add(base);
       group.userData.station = kind;
       return group;
+    }
+
+    function addStorageCabinet(rand:()=>number, restore?:SaveData) {
+      const cabinet=new THREE.Group();
+      const steel=new THREE.MeshStandardMaterial({color:0x173344,metalness:.65,roughness:.35});
+      const body=new THREE.Mesh(new RoundedBoxGeometry(1.5,2,.65,3,.08),steel);body.position.y=1;cabinet.add(body);
+      const panel=new THREE.Mesh(new RoundedBoxGeometry(1.35,1.85,.06,3,.04),new THREE.MeshStandardMaterial({color:0x25546a,metalness:.7,roughness:.3}));
+      panel.position.set(0,1,.36);panel.userData.cabinetDoor=true;cabinet.add(panel);
+      const handle=new THREE.Mesh(new THREE.TorusGeometry(.11,.025,8,20),new THREE.MeshStandardMaterial({color:0x66e8ff,emissive:0x125577}));handle.position.set(.42,1,.43);cabinet.add(handle);
+      cabinet.position.set(-runtime.roomWidth/2+1,0,runtime.roomLength/2-5);cabinet.rotation.y=Math.PI/2;
+      cabinet.userData.loot={bottle:rand()<.04?1:0,pearl:rand()<.35?1:0,goldBar:rand()<.014?1:0,resonationShield:runtime.stations.some(s=>s.needsShield)?1:rand()<.16?1:0};
+      const index=runtime.stations.length;
+      const opened=restore?.openedCabinets?.includes(index)??false;
+      panel.visible=!opened;runtime.roomGroup.add(cabinet);runtime.stations.push({object:cabinet,kind:"cabinet",activated:opened});
     }
 
     function createTrapdoor() {
@@ -1652,13 +1677,14 @@ export default function IonGame() {
           const z = runtime.chaseRoom ? runtime.roomLength/2-8-(i+1)*(runtime.roomLength-18)/5 : -runtime.roomLength / 2 + 4 + i * ((runtime.roomLength - 8) / Math.max(1, runtime.requiredResonators - 1));
           const resonator = createStation("resonator", runtime.haidIniActive ? 0xff6a00 : 0xff375f); resonator.scale.setScalar(runtime.haidIniActive ? 0.44 : 0.62); resonator.position.set(x, 0, z);
           resonator.rotation.y = x < 0 ? Math.PI / 2 : -Math.PI / 2; runtime.roomGroup.add(resonator);
-          runtime.stations.push({ object: resonator, kind: "resonator", activated: false });
+          runtime.stations.push({ object: resonator, kind: "resonator", activated: false, needsShield: !runtime.chaseRoom && !runtime.haidIniActive && room % 7 === 0 && i === 0 });
         }
       }
       if (roomIdentity(room) === "Crystal Crafter’s Workshop") addStation("crafter", new THREE.Vector3(-runtime.roomWidth / 2 + 1.4, 0, -1), 0x22e59b);
       if (roomIdentity(room) === "Infusionsmith Chamber") addStation("infusionsmith", new THREE.Vector3(runtime.roomWidth / 2 - 1.4, 0, -1), 0xa56bff);
       if (roomIdentity(room) === "Crystal Archive") addStation("archive", new THREE.Vector3(runtime.roomWidth / 2 - 1.4, 0, -1), 0xffcb54);
       if (runtime.persHubActive) addPersHub();
+      addStorageCabinet(rand, restore);
       buildDoor();
       if(runtime.paradoxWorld){if(runtime.doorPers)runtime.doorPers.visible=false;if(room===200)addParadoxRift(true);}
       else if(runtime.paradoxRift){
@@ -1742,6 +1768,7 @@ export default function IonGame() {
         discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion, lightInfusion: runtime.lightInfusion,
         accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
         wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil },
+        openedCabinets:runtime.stations.flatMap((s,i)=>s.kind==="cabinet"&&s.activated?[i]:[]),
         removedPickups:[...runtime.removedPickups], activatedResonators:runtime.stations.flatMap((s,i)=>s.kind==="resonator"&&s.activated?[i]:[]),
         mandatoryCollected:runtime.mandatoryCollected,noiseCount:runtime.noiseCount,noiseTime:runtime.noiseTime,
         noiseActive:runtime.noiseActive,haidIniActive:runtime.haidIniActive,grinIncoming:runtime.grinIncoming,
@@ -1761,7 +1788,7 @@ export default function IonGame() {
       runtime.ammo = save.ammo; runtime.battery = save.battery; runtime.crystals = { ...save.crystals };
       runtime.discovered = new Set(save.discovered); runtime.gunInfusion = save.gunInfusion; runtime.lightInfusion = save.lightInfusion;
       runtime.accessKeys = save.accessKeys;
-      runtime.maxAmmo = save.maxAmmo; runtime.inventory = save.inventory ? { ...save.inventory } : EMPTY_INVENTORY();
+      runtime.maxAmmo = save.maxAmmo; runtime.inventory = { ...EMPTY_INVENTORY(), ...save.inventory };
       runtime.basdinos = save.basdinos ?? 0; runtime.wardCharges = save.wardCharges ?? 0; runtime.speedBoostRooms = save.speedBoostRooms ?? 0;
       runtime.banishedUntil = { ...(save.banishedUntil ?? {}) };
       runtime.paradoxWorld=Boolean(save.paradoxWorld);runtime.paradoxJar=Boolean(save.paradoxJar);
@@ -2007,6 +2034,19 @@ export default function IonGame() {
       buildRoom(runtime.room+1);
     }
     function openStation(kind: Station["kind"], station?: Station) {
+      if(kind==="blood"){
+        if(runtime.inventory.bottle<1){notify("NEED AN EMPTY BOTTLE FROM A STORAGE CABINET");return;}
+        runtime.inventory.bottle--;runtime.inventory.sang++;notify("BLOOD SCOOPED · VIAL OF SÁNG CREATED");updateHud(true);return;
+      }
+      if(kind==="cabinet"){
+        if(!station||station.activated){notify("CABINET ALREADY SEARCHED");return;}
+        station.activated=true;station.object.traverse(child=>{if(child.userData.cabinetDoor)child.visible=false;});
+        const loot=station.object.userData.loot as Partial<Record<ItemKey,number>>;
+        const found:string[]=[];
+        for(const [key,count] of Object.entries(loot)){if(count){runtime.inventory[key as ItemKey]+=count;found.push(ITEMS[key as ItemKey].label);}}
+        if(loot.goldBar){badge("paradox","ascended");if(runtime.paradoxWorld)badge("paradox","ascendidox");}
+        notify(found.length?`CABINET · ${found.join(" · ").toUpperCase()}`:"CABINET EMPTY");updateHud(true);return;
+      }
       if(kind==="rift"){
         if(!runtime.stations.some(s=>s.kind==="rift")){notify("NO RIFT IN THIS ROOM");return;}
         if(party.role==="guest"){party.send({type:"action",room:runtime.room,action:"rift"});notify("WAITING FOR THE HOST TO CROSS THE RIFT");return;}
@@ -2045,6 +2085,7 @@ export default function IonGame() {
         return;
       }
       if (kind === "resonator") {
+        if(station?.needsShield && runtime.inventory.resonationShield<1){notify("RESONATION SHIELD REQUIRED · SEARCH THE STORAGE CABINET");return;}
         if (station && !station.activated) { station.activated = true; runtime.activeResonators += 1;
           badge("resonator");
           if(runtime.chaseRoom)runtime.enemies.filter(e=>e.kind==="blob"||e.kind==="remetons").forEach(e=>e.stunTimer=1.8);
@@ -2134,7 +2175,24 @@ export default function IonGame() {
     function useItem(key: ItemKey) {
       if (runtime.inventory[key] <= 0) return;
       if (key === "soul") { showScreen("banish"); return; }
+      if(key==="resonationShield"){notify("SHIELD READY · REUSABLE AT SHIELDED RESONATORS");return;}
+      if(key==="bottle"){
+        const pool=runtime.stations.find(s=>s.kind==="blood"&&s.object.position.distanceTo(runtime.player)<3);
+        if(!pool){notify("APPROACH A FLOOR BLOOD POOL TO SCOOP");return;}
+        openStation("blood",pool);return;
+      }
+      if(key==="goldBar"){
+        runtime.inventory.goldBar--;badge("paradox","ascended");if(runtime.paradoxWorld)badge("paradox","ascendidox");
+        beginAscended(runtime.paradoxWorld);close();return;
+      }
+      if(key==="sang"){
+        runtime.inventory.sang--;runtime.chaseState=null;
+        if(runtime.ascendedWorld){finishAscended();}
+        else buildRoom(Math.min(200,runtime.room+50));
+        if(!runtime.won)close();notify("VIAL OF SÁNG · FIFTY-DOOR RIFT CONSUMED");updateHud(true);return;
+      }
       runtime.inventory[key] -= 1;
+      if (key === "pearl") runtime.battery = Math.min(100,runtime.battery+25);
       if (key === "royalBattery") runtime.battery = 100;
       if (key === "obsidianMagazine") runtime.ammo = Math.min(runtime.maxAmmo, runtime.ammo + 6);
       if (key === "citrineRush") runtime.speedBoostRooms = Math.max(runtime.speedBoostRooms, 5);
@@ -2191,10 +2249,10 @@ export default function IonGame() {
       });
       runtime.stations.forEach((station, index) => {
         const distance = station.object.position.distanceTo(runtime.player);
-        if (distance < bestDistance && !(station.kind === "resonator" && station.activated)) { bestDistance = distance; runtime.nearest = { kind: "station", index };
-          runtime.prompt = station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
+        if (distance < bestDistance && !(station.activated && (station.kind === "resonator" || station.kind === "cabinet"))) { bestDistance = distance; runtime.nearest = { kind: "station", index };
+          runtime.prompt = station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
             : station.kind === "trapdoor" ? runtime.chaseRoom ? "TRAPDOOR JAMMED · KEEP RUNNING" : runtime.haidIniActive ? runtime.hiding ? "E  EXIT · HAID-INI CAN ENTER" : "E  HIDE · UNSAFE FROM HAID-INI" : runtime.hiding ? "E  EXIT TRAPDOOR" : "E  HIDE IN TRAPDOOR"
-            : station.kind === "resonator" ? station.activated ? "RESONATOR STABLE" : "E  TUNE RESONATOR"
+            : station.kind === "resonator" ? station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  TUNE · RESONATION SHIELD REQUIRED" : "E  TUNE RESONATOR"
             : `E  USE ${station.kind.replace("infusionsmith", "INFUSIONSMITH").toUpperCase()}`; }
       });
       if (runtime.door) {
@@ -2586,7 +2644,7 @@ export default function IonGame() {
         {savedRuns.map((slot,index)=><article className="save-card" key={index}><small>SLOT {index+1}</small><strong>{slot?`ROOM ${String(slot.state.room).padStart(3,"0")}`:"EMPTY SLOT"}</strong><p>{slot?`Saved ${new Date(slot.savedAt).toLocaleString()} · ${slot.state.discovered?.length??0}/7 minerals`:"Start a new descent and save automatically."}</p>{slot&&<button onClick={()=>actionRef.current?.loadSlot(index)}>CONTINUE RUN</button>}<button className="secondary" onClick={()=>actionRef.current?.startNewSlot(index)}>{slot?"NEW RUN IN THIS SLOT":"START NEW RUN"}</button></article>)}
       </div></MenuShell>}
       {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle={`You are ${hud.playerName} · two players · real-time WebRTC`} onClose={() => {if(runtimeRef.current?.room===1&&!partyRef.current?.code)showScreen("start");else showScreen("pause");}}><div className="party-panel"><p>{partyStatus}</p>{hud.partyCode&&<><div className="party-code">{hud.partyCode}</div><p>{hud.playerName}{hud.teammateName?` + ${hud.teammateName}`:" · WAITING FOR A NAMED SURVIVOR"}</p></>}<button onClick={() => void actionRef.current?.hostParty()} disabled={Boolean(hud.partyCode)}>HOST A ROOM</button><label htmlFor="ion-party-code">JOIN A FRIEND</label><div className="party-join"><input id="ion-party-code" inputMode="text" maxLength={6} value={partyInput} onChange={event=>setPartyInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,6))} placeholder="ROOM CODE" /><button disabled={!validPartyCode(partyInput)&&!secretSignal(partyInput)} onClick={()=>void actionRef.current?.joinParty(partyInput)}>ENTER</button></div><p className="party-note">Keep the host page open until the second randomized survivor name appears. Cross-network connections use multiple encrypted WebRTC routes automatically.</p>{hud.partyCode&&<button className="secondary" onClick={()=>{actionRef.current?.leaveParty();showScreen("pause");}}>LEAVE PARTY</button>}{hud.partyCode&&<button onClick={()=>actionRef.current?.resume()}>RETURN TO GAME</button>}</div></MenuShell>}
-      {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/${BADGES.length} unlocked · 40% have no field tutorial`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-code-panel"><label htmlFor="ion-badge-code">ENTER BADGE CODE</label><div className="badge-code-entry"><input id="ion-badge-code" inputMode="text" maxLength={6} value={badgeInput} onChange={event=>setBadgeInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,6))} placeholder="ION###"/><button disabled={!badgeInput} onClick={()=>actionRef.current?.redeemBadgeCode(badgeInput)}>UNLOCK</button></div><small>Enter a badge code here. Classified *+* badges require their secret conditions.</small></div><div className="badge-grid">{BADGES.map(b=>{const earned=badgeProgress.unlocked.includes(b.id);const rarity=b.rarity??"standard";const classified=rarity==="starplus"&&!earned;const rarityLabel=rarity==="starplus"?"*+*":rarity.toUpperCase();return <article key={b.id} className={`${earned?"earned":"locked"} badge-${rarity}`}><span>{earned?"★ EARNED":"◇ LOCKED"} · {rarityLabel}</span><strong>{classified?"CLASSIFIED":b.title}</strong><p>{classified?"This badge can only be given by a secret facility condition.":b.description}</p>{!classified&&b.tutorial&&<small>FIELD TUTORIAL: {b.tutorial}</small>}</article>})}</div></MenuShell>}
+      {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/${BADGES.length} unlocked · 40% have no field tutorial`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-code-panel"><label htmlFor="ion-badge-code">ENTER BADGE CODE</label><div className="badge-code-entry"><input id="ion-badge-code" inputMode="text" maxLength={9} value={badgeInput} onChange={event=>setBadgeInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,9))} placeholder="uaz131213"/><button disabled={!badgeInput} onClick={()=>actionRef.current?.redeemBadgeCode(badgeInput)}>UNLOCK</button></div><small>Enter your shifted badge code here. Classified *+* badges require their secret conditions.</small></div><div className="badge-grid">{BADGES.map(b=>{const earned=badgeProgress.unlocked.includes(b.id);const rarity=b.rarity??"standard";const classified=rarity==="starplus"&&!earned;const rarityLabel=rarity==="starplus"?"*+*":rarity.toUpperCase();return <article key={b.id} className={`${earned?"earned":"locked"} badge-${rarity}`}><span>{earned?"★ EARNED":"◇ LOCKED"} · {rarityLabel}</span><strong>{classified?"CLASSIFIED":b.title}</strong><p>{classified?"This badge can only be given by a secret facility condition.":b.description}</p>{!classified&&b.tutorial&&<small>FIELD TUTORIAL: {b.tutorial}</small>}</article>})}</div></MenuShell>}
       {screen === "win" && <section className="win-screen overlay-panel"><span className="eyebrow">EXTRACTION ROOM · SIGNAL RESTORED</span><h2>YOU REACHED<br /><strong>ROOM 200</strong></h2><p>Every infusion is stable. The blast doors open. Something below them keeps smiling.</p><div className="completion-ring" style={{ "--completion": `${discoveredPercent}%` } as React.CSSProperties}><span>7 / 7</span><small>INFUSIONS</small></div><button className="primary-button" onClick={() => actionRef.current?.start(true)}>DESCEND AGAIN</button><button className="text-button" onClick={() => actionRef.current?.exploreExtraction()}>EXPLORE EXTRACTION</button></section>}
       {screen === "crafter" && <MenuShell title="CRYSTAL CRAFTER" subtitle="Convert finite specimens into survival equipment" onClose={() => actionRef.current?.close()}><div className="recipe-grid">
         <Recipe name="Toxic rounds ×4" cost="1 MAL" note="Restores rifle ammunition" onClick={() => actionRef.current?.craft("ammo")} />

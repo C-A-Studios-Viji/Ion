@@ -57,13 +57,18 @@ export const TUTORIALLESS_BADGE_COUNT=BADGES.filter(b=>!b.tutorial).length;
 
 // Ordinary badges have compact deterministic facility codes. Classified *+* badges
 // remain tied to their secret gameplay conditions and intentionally have no code.
+export function encodeBadgeCode(code: string): string {
+  return [...code.toLowerCase()].map(c => /[a-z]/.test(c)
+    ? String.fromCharCode(97 + (c.charCodeAt(0) - 97 + 12) % 26)
+    : /[0-9]/.test(c) ? String(Number(c) + 12) : c).join("");
+}
 export function badgeCode(badgeId: string): string | null {
   const badge = BADGES.find(b => b.id === badgeId);
   if (!badge || badge.rarity === "starplus") return null;
-  return `ION${String(BADGES.indexOf(badge) + 1).padStart(3, "0")}`;
+  return encodeBadgeCode(`ION${String(BADGES.indexOf(badge) + 1).padStart(3, "0")}`);
 }
 export function badgeFromCode(code: string): Badge | null {
-  const normalized = code.trim().toUpperCase();
+  const normalized = code.trim().toLowerCase();
   return BADGES.find(b => badgeCode(b.id) === normalized) ?? null;
 }
 
