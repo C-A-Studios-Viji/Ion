@@ -4,7 +4,7 @@ const ts=require('typescript');const THREE=require('three');
 const root=path.resolve(__dirname,'..');
 
 // Runs the actual game closures with a renderer stub: no GPU or browser needed.
-function gameHarness(){
+function gameHarness(authorized=true){
   const refs=[];let effect,frame,now=0;const saved=new Map();const cache=new Map();
   const canvas={dataset:{},addEventListener(){},requestPointerLock(){return Promise.resolve();}};
   const react={useRef(value){const ref={current:refs.length===0?canvas:value};refs.push(ref);return ref;},useState(value){return [value,()=>{}];},useEffect(fn){effect=fn;}};
@@ -16,7 +16,7 @@ function gameHarness(){
     const module={exports:{}};cache.set(file,module);
     const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
     const context={module,exports:module.exports,console,URL,Map,Set,Math:Object.assign(Object.create(Math),{random:()=>.5}),
-      performance:{now:()=>now},requestAnimationFrame(fn){frame=fn;return 1;},cancelAnimationFrame(){},
+      crypto:require('node:crypto').webcrypto,TextEncoder,Intl,Date,performance:{now:()=>now},requestAnimationFrame(fn){frame=fn;return 1;},cancelAnimationFrame(){},
       localStorage:{getItem:k=>saved.get(k)??null,setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},
       window:{innerWidth:1280,innerHeight:720,devicePixelRatio:1,matchMedia:()=>({matches:true}),addEventListener(){},removeEventListener(){},setTimeout(){return 1;}},
       document:{body:{dataset:{}},pointerLockElement:null,addEventListener(){},removeEventListener(){},exitPointerLock(){}},
@@ -29,22 +29,22 @@ function gameHarness(){
       }};
     vm.runInNewContext(code,context,{filename:file});return module.exports;
   }
-  const Component=load(path.join(root,'app/IonGame.tsx')).default;Component();effect();
+  const Component=load(path.join(root,'app/IonGame.tsx')).default;Component();if(authorized)refs[4].current=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Kolkata",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());effect();
   const runtime=refs[1].current,act=refs[2].current;runtime.audio=audio;
   const step=(seconds=.05)=>{for(let t=0;t<seconds;t+=.05){now+=50;frame(now);}};
   const enter=(room,chaseState=null)=>{
-    runtime.room=room;runtime.checkpoint=null;saved.set('ion-checkpoint',JSON.stringify({room,chaseState,ammo:6,battery:100,crystals:{malachite:0,amethyst:0,quartz:0,obsidian:0,citrine:0,fluorite:0,corrupted:0},discovered:[],gunInfusion:null,lightInfusion:null,accessKeys:10,maxAmmo:8}));act.restartCheckpoint();
+    runtime.room=room;runtime.checkpoint=null;saved.set('ion-checkpoint',JSON.stringify({room,chaseState,paradoxWorld:runtime.paradoxWorld,ammo:6,battery:100,crystals:{malachite:0,amethyst:0,quartz:0,obsidian:0,citrine:0,fluorite:0,corrupted:0},discovered:[],gunInfusion:null,lightInfusion:null,accessKeys:10,maxAmmo:8}));act.restartCheckpoint();
   };
   const useAt=object=>{runtime.player.copy(object.position).add(new THREE.Vector3(0,1.65,0));step();act.interact();};
   return {runtime,act,step,enter,useAt,load,saved};
 }
 
-test('two Fluorite per Infusionsmith batch, up to four rarer crawlers, 125 persistent badges and three save slots',async()=>{
+test('two Fluorite per Infusionsmith batch, up to four rarer crawlers, 365 persistent badges and three save slots',async()=>{
   const h=gameHarness();await Promise.resolve();await Promise.resolve();
   const progression=h.load(path.join(root,'app/progression.ts'));
-  assert.equal(progression.BADGES.length,125);
-  assert.equal(new Set(progression.BADGES.map(b=>b.id)).size,125);
-  assert.equal(progression.TUTORIALLESS_BADGE_COUNT,50);
+  assert.equal(progression.BADGES.length,365);
+  assert.equal(new Set(progression.BADGES.map(b=>b.id)).size,365);
+  assert.equal(progression.TUTORIALLESS_BADGE_COUNT,146);
   const allRolls=(...values)=>{let i=0;return()=>values[i++]};
   assert.equal(progression.rollCrawlerPack(allRolls(.99),0),0);
   assert.equal(progression.rollCrawlerPack(allRolls(0,.99),0),1);
@@ -158,8 +158,8 @@ test('Pers tear, prime-door Gold, Ascendidox and the 20-door shortcut are playab
   const rules=h.load(path.join(root,'app/paradox.ts'));
   assert.equal(rules.paradoxEncounter(25,.99),'grin');
   assert.equal(rules.paradoxEncounter(50,0),'grin');
-  assert.equal(rules.paradoxEncounter(26,.06999),'blob');
-  assert.equal(rules.paradoxEncounter(26,.07),null);
+  assert.equal(rules.paradoxEncounter(26,.02999),'blob');
+  assert.equal(rules.paradoxEncounter(26,.03),null);
   assert.equal(rules.isPrimeDoor(2),true);assert.equal(rules.isPrimeDoor(97),true);
   assert.equal(rules.isPrimeDoor(1),false);assert.equal(rules.isPrimeDoor(99),false);
   assert.equal(rules.goldBarSpawns(97,.013999),true);assert.equal(rules.goldBarSpawns(97,.014),false);
@@ -190,7 +190,7 @@ test('Pers tear, prime-door Gold, Ascendidox and the 20-door shortcut are playab
   progress=JSON.parse(h.saved.get('ion-badges-v1'));assert(progress.unlocked.includes('paradox-conqueror'));
   const catalog=h.load(path.join(root,'app/progression.ts')).BADGES;
   const progression=h.load(path.join(root,'app/progression.ts'));
-  assert.equal(catalog.length,125);assert.equal(catalog.find(b=>b.id==='ascendidox').tutorial,undefined);
+  assert.equal(catalog.length,365);assert.equal(catalog.find(b=>b.id==='ascendidox').tutorial,undefined);
   assert.equal(catalog.find(b=>b.id==='ascendidox').rarity,'xtraultra');
   const codeProgress=progression.emptyBadgeProgress();
   assert(progression.awardBadges(codeProgress,'multiplayer','triple-code').some(b=>b.id==='triple-signal'));
@@ -218,23 +218,17 @@ test('*+* Win requires cleared Ascended 20, Pers, the Paradox Blob and the neon 
   assert(progress.unlocked.includes('win'));assert.equal(r.winQuestArmed,false);assert.equal(r.winBadgeSpawned,false);
 });
 
-test('secret join signals award classified *+* badges without opening multiplayer',async()=>{
-  const h=gameHarness();await Promise.resolve();await Promise.resolve();
-  await h.act.joinParty('XXOOP');await h.act.joinParty('1dev1');
-  const progress=JSON.parse(h.saved.get('ion-badges-v1'));
-  assert(progress.unlocked.includes('better-skip-pers'));
-  assert(progress.unlocked.includes('one-dev-one-badge'));
-});
-
-test('ordinary badges each have a unique ION code while *+* stays classified',()=>{
-  const h=gameHarness();const p=h.load(path.join(root,'app/progression.ts'));
-  const codes=p.BADGES.filter(b=>b.rarity!=='starplus').map(b=>p.badgeCode(b.id));
-  assert.equal(p.encodeBadgeCode('ION101'),'uaz131213');assert.equal(p.badgeFromCode('ION001'),null);
-  assert.equal(codes.length,122);assert.equal(new Set(codes).size,122);
-  assert.equal(p.badgeFromCode('uaz121213').id,p.BADGES[0].id);
-  assert.equal(p.badgeCode('win'),null);assert.equal(p.badgeFromCode('ION999'),null);
-  h.act.redeemBadgeCode('uaz121213');
-  assert(JSON.parse(h.saved.get('ion-badges-v1')).unlocked.includes('room-2'));
+test('legacy codes cannot grant badges and permission gates direct selection',async()=>{
+ const h=gameHarness(false);await Promise.resolve();await Promise.resolve();
+ await h.act.joinParty('XXOOP');await h.act.joinParty('1DEV1');
+ h.act.grantBadge('room-2');h.enter(10);
+ assert.equal(h.saved.get('ion-badges-v1'),undefined);
+ const authorized=gameHarness();await Promise.resolve();await Promise.resolve();
+ authorized.act.grantBadge('win');
+ assert(JSON.parse(authorized.saved.get('ion-badges-v1')).unlocked.includes('win'));
+ const p=h.load(path.join(root,'app/progression.ts'));
+ assert.equal(p.badgeFromCode,undefined);assert.equal(p.badgeCode,undefined);
+ assert.equal(p.BADGES.filter(b=>b.event==='boon').length,240);
 });
 
 test('Pers Hub guarantees Citrine and Obsidian specimens',async()=>{
@@ -269,3 +263,33 @@ test('shielded resonators require reusable protection and their room cabinet sup
  h.useAt(cabinet.object);r.nearest={kind:'station',index:r.stations.indexOf(shielded)};h.act.interact();
  assert.equal(shielded.activated,true);assert.equal(r.inventory.resonationShield,1);
 });
+
+ test('daily codes verify digest, date, invalid input and midnight expiry',async()=>{
+ const h=gameHarness();const permission=h.load(path.join(root,'app/badgePermission.ts'));
+ const code='A1'.repeat(16),crypto=require('node:crypto');
+ const record={date:'2026-10-26',sha256:crypto.createHash('sha256').update(code).digest('hex')};
+ assert.equal(await permission.verifyPermission(code.toLowerCase(),record,new Date('2026-10-26T12:00:00Z')),true);
+ assert.equal(await permission.verifyPermission('B2'.repeat(16),record,new Date('2026-10-26T12:00:00Z')),false);
+ assert.equal(await permission.verifyPermission(code,record,new Date('2026-10-26T18:30:00Z')),false);
+ assert.equal(await permission.verifyPermission('ION001',record,new Date('2026-10-26T12:00:00Z')),false);
+ });
+ test('Boons persist, Infused unlocks records, Archive summons Boonie, Resonator is optional',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();
+ h.act.startNewSlot(0);h.act.toggleBoon('infused');h.act.toggleBoon('sugar');h.act.start(true);
+ const r=h.runtime;assert.equal(r.discovered.size,7);assert(r.boons.includes('sugar'));
+ assert.equal(r.pickups.filter(p=>p.kind==='candy').length,4);h.act.saveRun();h.act.loadSlot(0);assert(r.boons.includes('infused'));
+ h.enter(17);const THREE=require('three');const archive={kind:'archive',object:new THREE.Group()};r.stations.push(archive);
+ r.discovered=new Set(['malachite','amethyst','quartz','obsidian','citrine','fluorite','corrupted']);
+ h.act.completeArchive();assert.equal(r.boonieMet,true);assert(r.enemies.some(e=>e.kind==='boonie'));
+ const rainbow={kind:'rainbow',object:new THREE.Group()};r.stations.push(rainbow);assert.equal(r.resonatorWorld,false);
+ r.nearest={kind:'station',index:r.stations.indexOf(rainbow)};h.act.interact();
+ assert.equal(r.room,300);assert.equal(r.resonatorWorld,true);assert(r.platforms.length>20);assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,5);
+ assert(r.enemies.some(e=>e.kind==='blob'));assert(r.enemies.some(e=>e.kind==='haidini'));
+ h.act.saveRun();h.act.loadSlot(0);assert.equal(r.room,300);assert.equal(r.resonatorWorld,true);
+ });
+ test('Paradox excludes ambient facility mobs and ammo rolls at fifty percent',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();const r=h.runtime;
+ for(const room of [24,70,120,199]){r.paradoxWorld=true;h.enter(room);assert.equal(r.noiseActive,false);assert(r.enemies.every(e=>['entity','blob'].includes(e.kind)));}
+ const source=fs.readFileSync(path.join(root,'app/IonGame.tsx'),'utf8');assert(source.includes('if (rand() < 0.50) makePickup("ammo"'));
+ const rules=h.load(path.join(root,'app/paradox.ts'));assert.equal(rules.paradoxEncounter(26,.029999),'blob');assert.equal(rules.paradoxEncounter(26,.03),null);
+ });

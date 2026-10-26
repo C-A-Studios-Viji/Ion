@@ -1,9 +1,9 @@
 import * as THREE from "three";
 import { gradientMaterial } from "./surfaceStyle";
 
-export type MonsterKind = "entity" | "blob" | "haidini" | "crawler" | "watcher" | "sound" | "prism" | "mimic" | "wraith" | "noise" | "remetons";
-export const MONSTER_NAMES:Record<MonsterKind,string>={entity:"THE GRIN",blob:"THE BLOB",haidini:"HAID-INI",crawler:"CRAWLER",watcher:"WATCHER",sound:"SOUND HUNTER",prism:"PRISM",mimic:"MIMIC",wraith:"WRAITH",noise:"NOISE",remetons:"REMETONS"};
-export const MONSTER_COLORS:Record<MonsterKind,number>={entity:0xa7eaff,blob:0xfb4f84,haidini:0xff8b2e,crawler:0xc84a70,watcher:0x44cfff,sound:0x54b9a8,prism:0xa077ff,mimic:0x39e5bc,wraith:0xabb8ff,noise:0x65eaff,remetons:0xff183f};
+export type MonsterKind = "entity" | "blob" | "haidini" | "crawler" | "watcher" | "sound" | "prism" | "mimic" | "wraith" | "noise" | "remetons" | "boonie";
+export const MONSTER_NAMES:Record<MonsterKind,string>={entity:"THE GRIN",blob:"THE BLOB",haidini:"HAID-INI",crawler:"CRAWLER",watcher:"WATCHER",sound:"SOUND HUNTER",prism:"PRISM",mimic:"MIMIC",wraith:"WRAITH",noise:"NOISE",boonie:"BOONIE",remetons:"REMETONS"};
+export const MONSTER_COLORS:Record<MonsterKind,number>={entity:0xa7eaff,blob:0xfb4f84,haidini:0xff8b2e,crawler:0xc84a70,watcher:0x44cfff,sound:0x54b9a8,prism:0xa077ff,mimic:0x39e5bc,wraith:0xabb8ff,noise:0x65eaff,boonie:0xe6a0ff,remetons:0xff183f};
 
 // Hand-shaped 3D silhouettes use curved tubes and smooth surfaces, not block avatars.
 // Every creature faces +Z, including its camera-space death performance.
@@ -28,7 +28,12 @@ export function createMonster(kind:MonsterKind):THREE.Group {
     for(const side of [-1,1]){orb([side*spread,y,z],[r*1.5,r,r*.65],black);orb([side*spread,y,z+r*.7],[r*.38,r*.65,r*.3],eye);}
   };
   let focus=1.8;
-  if(kind==="entity"){
+  if(kind==="boonie"){
+    orb([0,1.5,0],[.65,1.4,.55],skin);orb([0,2.7,0],[.8,.55,.5],dark);
+    for(let i=0;i<9;i++){const a=i/9*Math.PI*2;orb([Math.cos(a)*.7,2.9+Math.sin(a)*.5,.2],[.15,.15,.15],new THREE.MeshBasicMaterial({color:new THREE.Color().setHSL(i/9,1,.65)}));}
+    orb([-.27,2.7,.5],[.1,.18,.1],eye);orb([.27,2.7,.5],[.1,.18,.1],eye);
+    tube([[-.5,2,0],[-1.2,1.5,.4],[-1,1,.5]],.1,skin);tube([[.5,2,0],[1.2,1.5,.4],[1,1,.5]],.1,skin);
+  } else if(kind==="entity"){
     orb([0,1.25,0],[.25,.95,.2],dark);orb([0,2.65,0],[.53,.63,.38],bone);
     orb([0,2.46,.32],[.47,.21,.14],black);teeth(2.43,.46,.86,19);eyes(2.85,.31,.22,.13);
     for(const s of [-1,1]){

@@ -1,8 +1,9 @@
+import { negativeBoons } from "./boons";
 export type BadgeEvent =
   | "room" | "crystal" | "encounter" | "escape" | "kill" | "death" | "craft"
   | "infuse" | "synthesize" | "specimen" | "resonator" | "chase" | "pers_trade"
   | "pers_item" | "basdino" | "banish" | "multiplayer" | "revive" | "save" | "paradox"
-  | "gold" | "ascended" | "paradox_room" | "secret";
+  | "boon" | "gold" | "ascended" | "paradox_room" | "secret";
 
 export type BadgeRarity = "standard" | "rare" | "ultra" | "xtraultra" | "starplus";
 export type Badge = { id: string; title: string; description: string; tutorial?: string; event: BadgeEvent; target: number; detail?: string; rarity?: BadgeRarity };
@@ -36,7 +37,7 @@ export const BADGES: Badge[] = [
   {id:"paradox-conqueror",title:"Two Hundred Reversed",description:"Beat the 200-door Paradox—or survive its Ascended shortcut.",tutorial:"Reach *200 and escape through its return tear, or find Gold inside Paradox and clear all 20 Ascended doors.",event:"paradox",target:1,detail:"completed",rarity:"xtraultra"},
   {id:"triple-signal",title:"Triple Signal",description:"Host or join with three matching digits in the five-digit code.",tutorial:"Multiplayer codes are random. Connect using any valid code containing one digit at least three times.",event:"multiplayer",target:1,detail:"triple-code",rarity:"xtraultra"},
   {id:"grin-cycle",title:"Grin Around the Corner",description:"Survive the Grin on every twenty-fifth reversed door.",tutorial:"Reach a reversed door divisible by 25 and escape the guaranteed Grin encounter.",event:"escape",target:1,detail:"reversed-grin",rarity:"ultra"},
-  {id:"blob-omen",title:"Seven Percent Omen",description:"Survive a random reversed-world Blob breach.",tutorial:"A reversed room has a 7% chance to summon the Blob. Survive the breach.",event:"escape",target:1,detail:"reversed-blob",rarity:"ultra"},
+  {id:"blob-omen",title:"Reversed Omen",description:"Survive a random reversed-world Blob breach.",tutorial:"A reversed room has a 3% chance to summon the Blob. Survive the breach.",event:"escape",target:1,detail:"reversed-blob",rarity:"ultra"},
   ...[1,5,10,15,20].map(target=>({id:`ascended-${target}`,title:`Ascended ${target}`,description:`Reach Ascended Door ${target}.`,event:"ascended" as const,target,rarity:target===20?"ultra" as const:"rare" as const})),
   ...[1,2,3,5,10].map(target=>({id:`gold-${target}`,title:`Aureate Collector ${target}`,description:`Find ${target} Gold Bar${target===1?"":"s"}.`,event:"gold" as const,target,rarity:target>=5?"ultra" as const:"rare" as const})),
   ...[25,50,75,100,150].map(target=>({id:`paradox-depth-${target}`,title:`Paradox Depth *${target}`,description:`Reach Door *${target} inside Paradox.`,event:"paradox_room" as const,target,rarity:target>=100?"ultra" as const:"rare" as const})),
@@ -49,28 +50,12 @@ export const BADGES: Badge[] = [
 if (BADGES.length !== 125 || new Set(BADGES.map(b => b.id)).size !== 125) throw new Error("Badge catalog must contain 125 unique badges");
 // Exactly 40% of the archive is intentionally undocumented. Secret-tier records and
 // Ascendidox are always among them; the remainder is distributed across the catalog.
+BADGES.push(...negativeBoons.flatMap(boon=>Array.from({length:30},(_,i)=>({id:`boon-${boon.id}-${i+1}`,title:`${boon.name} · Trial ${i+1}`,description:`Cross ${(i+1)*5} doors with ${boon.name} active. Daily permission is required.`,event:"boon" as const,detail:boon.id,target:(i+1)*5,rarity:"xtraultra" as const,tutorial:`Activate ${boon.name} before the run and survive ${(i+1)*5} door advances.`}))));
 const tutorialPriority=[...BADGES.filter(b=>b.rarity==="starplus"||b.id==="ascendidox"),...BADGES.filter((_,index)=>index%5===0||index%5===2),...BADGES];
 const tutoriallessIds=new Set<string>();
 for(const badge of tutorialPriority){if(tutoriallessIds.size>=BADGES.length*.4)break;tutoriallessIds.add(badge.id);}
 BADGES.forEach(b=>{if(tutoriallessIds.has(b.id))delete b.tutorial;else if(!b.tutorial)b.tutorial=b.description;});
 export const TUTORIALLESS_BADGE_COUNT=BADGES.filter(b=>!b.tutorial).length;
-
-// Ordinary badges have compact deterministic facility codes. Classified *+* badges
-// remain tied to their secret gameplay conditions and intentionally have no code.
-export function encodeBadgeCode(code: string): string {
-  return [...code.toLowerCase()].map(c => /[a-z]/.test(c)
-    ? String.fromCharCode(97 + (c.charCodeAt(0) - 97 + 12) % 26)
-    : /[0-9]/.test(c) ? String(Number(c) + 12) : c).join("");
-}
-export function badgeCode(badgeId: string): string | null {
-  const badge = BADGES.find(b => b.id === badgeId);
-  if (!badge || badge.rarity === "starplus") return null;
-  return encodeBadgeCode(`ION${String(BADGES.indexOf(badge) + 1).padStart(3, "0")}`);
-}
-export function badgeFromCode(code: string): Badge | null {
-  const normalized = code.trim().toLowerCase();
-  return BADGES.find(b => badgeCode(b.id) === normalized) ?? null;
-}
 
 export type BadgeProgress = { unlocked: string[]; counts: Partial<Record<BadgeEvent, number>>; detailCounts: Record<string, number> };
 export const emptyBadgeProgress = (): BadgeProgress => ({unlocked:[],counts:{},detailCounts:{}});
@@ -97,7 +82,7 @@ export function readRunSlots<T>(storage: Pick<Storage,"getItem">): (RunSlot<T> |
     const data = JSON.parse(storage.getItem(RUN_STORAGE_KEY) ?? "null");
     return Array.from({length:3},(_,i)=>{
       const entry=data?.[i];
-      return Number.isFinite(entry?.savedAt) && Number.isInteger(entry?.state?.room) && entry.state.room>=1 && entry.state.room<=200 ? entry : null;
+      return Number.isFinite(entry?.savedAt) && Number.isInteger(entry?.state?.room) && entry.state.room>=1 && (entry.state.room<=200 || entry.state.room===300&&entry.state.resonatorWorld===true) ? entry : null;
     });
   } catch { return [null,null,null]; }
 }
