@@ -1,9 +1,9 @@
 import * as THREE from "three";
 import { gradientMaterial } from "./surfaceStyle";
 
-export type MonsterKind = "entity" | "blob" | "haidini" | "crawler" | "watcher" | "sound" | "prism" | "mimic" | "wraith" | "noise" | "remetons" | "boonie" | "void" | "ramyram";
-export const MONSTER_NAMES:Record<MonsterKind,string>={void:"VOID",ramyram:"X::::RamYraM::::X",entity:"THE GRIN",blob:"THE BLOB",haidini:"HAID-INI",crawler:"CRAWLER",watcher:"WATCHER",sound:"SOUND HUNTER",prism:"PRISM",mimic:"MIMIC",wraith:"WRAITH",noise:"NOISE",boonie:"BOONIE",remetons:"REMETONS"};
-export const MONSTER_COLORS:Record<MonsterKind,number>={void:0x8050ff,ramyram:0xffd561,entity:0xa7eaff,blob:0xfb4f84,haidini:0xff8b2e,crawler:0xc84a70,watcher:0x44cfff,sound:0x54b9a8,prism:0xa077ff,mimic:0x39e5bc,wraith:0xabb8ff,noise:0x65eaff,boonie:0xe6a0ff,remetons:0xff183f};
+export type MonsterKind = "entity" | "blob" | "haidini" | "crawler" | "watcher" | "sound" | "prism" | "mimic" | "wraith" | "noise" | "remetons" | "boonie" | "void" | "ramyram" | "lore" | "serp";
+export const MONSTER_NAMES:Record<MonsterKind,string>={lore:"LORE",serp:"SERP",void:"VOID",ramyram:"X::::RamYraM::::X",entity:"THE GRIN",blob:"THE BLOB",haidini:"HAID-INI",crawler:"CRAWLER",watcher:"WATCHER",sound:"SOUND HUNTER",prism:"PRISM",mimic:"MIMIC",wraith:"WRAITH",noise:"NOISE",boonie:"BOONIE",remetons:"REMETONS"};
+export const MONSTER_COLORS:Record<MonsterKind,number>={lore:0xb77dff,serp:0xffdf38,void:0x8050ff,ramyram:0xffd561,entity:0xa7eaff,blob:0xfb4f84,haidini:0xff8b2e,crawler:0xc84a70,watcher:0x44cfff,sound:0x54b9a8,prism:0xa077ff,mimic:0x39e5bc,wraith:0xabb8ff,noise:0x65eaff,boonie:0xe6a0ff,remetons:0xff183f};
 
 // Hand-shaped 3D silhouettes use curved tubes and smooth surfaces, not block avatars.
 // Every creature faces +Z, including its camera-space death performance.
@@ -28,7 +28,11 @@ export function createMonster(kind:MonsterKind):THREE.Group {
     for(const side of [-1,1]){orb([side*spread,y,z],[r*1.5,r,r*.65],black);orb([side*spread,y,z+r*.7],[r*.38,r*.65,r*.3],eye);}
   };
   let focus=1.8;
-  if(kind==="void"){
+  if(kind==="serp"||kind==="lore"){
+    const light=kind==="serp"?eye:skin;orb([0,1.35,0],[.38,1.1,.26],dark);orb([0,2.6,0],[.38,.48,.34],light);
+    for(const side of [-1,1]){tube([[side*.3,2.1,0],[side*.65,1.25,.2],[side*.82,.5,.2]],.09,dark);tube([[side*.22,.7,0],[side*.28,.22,.1]],.1,dark);}
+    eyes(2.65,.3,.15,.07);const lantern=orb([.85,.63,.3],[.2,.27,.2],new THREE.MeshBasicMaterial({color:kind==="serp"?0xffed59:0xb77dff}));lantern.name="lantern";
+  }else if(kind==="void"){
     orb([0,1.8,0],[.8,1.65,.45],black);const halo=mesh(new THREE.TorusGeometry(.88,.07,12,48),eye,[0,2.5,.1]);halo.rotation.y=.4;
     for(let i=0;i<5;i++){const a=i/5*Math.PI*2;tube([[0,1.8,0],[Math.cos(a)*1.2,1.8+Math.sin(a),.1],[Math.cos(a)*1.6,1.8+Math.sin(a)*1.4,.4]],.045,eye);}eyes(2.45,.45,.25,.08);
   }else if(kind==="ramyram"){

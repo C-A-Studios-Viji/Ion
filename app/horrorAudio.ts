@@ -1,6 +1,8 @@
 import type { MonsterKind } from "./monsterModels";
 // CC0 recordings by Ogrebane; full source and processing notes in ASSET_CREDITS.md.
 const urls:Record<MonsterKind,string>={
+ lore:new URL("./assets/audio/monster-11.ogg",import.meta.url).href,
+ serp:new URL("./assets/audio/monster-6.ogg",import.meta.url).href,
  void:new URL("./assets/audio/monster-9.ogg",import.meta.url).href,
  ramyram:new URL("./assets/audio/monster-7.ogg",import.meta.url).href,
  boonie:new URL("./assets/audio/monster-11.ogg",import.meta.url).href,

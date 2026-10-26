@@ -39,12 +39,12 @@ function gameHarness(authorized=true){
   return {runtime,act,step,enter,useAt,load,saved,listeners,screen:()=>refs[3].current,setRandom:value=>{randomRoll=value;}};
 }
 
-test('two Fluorite per Infusionsmith batch, up to four rarer crawlers, 815 persistent badges and three save slots',async()=>{
+test('two Fluorite per Infusionsmith batch, up to four rarer crawlers, 816 persistent badges and three save slots',async()=>{
   const h=gameHarness();await Promise.resolve();await Promise.resolve();
   const progression=h.load(path.join(root,'app/progression.ts'));
-  assert.equal(progression.BADGES.length,815);
-  assert.equal(new Set(progression.BADGES.map(b=>b.id)).size,815);
-  assert.equal(progression.TUTORIALLESS_BADGE_COUNT,326);
+  assert.equal(progression.BADGES.length,816);
+  assert.equal(new Set(progression.BADGES.map(b=>b.id)).size,816);
+  assert.equal(progression.TUTORIALLESS_BADGE_COUNT,327);
   const allRolls=(...values)=>{let i=0;return()=>values[i++]};
   assert.equal(progression.rollCrawlerPack(allRolls(.99),0),0);
   assert.equal(progression.rollCrawlerPack(allRolls(0,.99),0),1);
@@ -190,7 +190,7 @@ test('Pers tear, prime-door Gold, Ascendidox and the 20-door shortcut are playab
   progress=JSON.parse(h.saved.get('ion-badges-v1'));assert(progress.unlocked.includes('paradox-conqueror'));
   const catalog=h.load(path.join(root,'app/progression.ts')).BADGES;
   const progression=h.load(path.join(root,'app/progression.ts'));
-  assert.equal(catalog.length,815);assert.equal(catalog.find(b=>b.id==='ascendidox').tutorial,undefined);
+  assert.equal(catalog.length,816);assert.equal(catalog.find(b=>b.id==='ascendidox').tutorial,undefined);
   assert.equal(catalog.find(b=>b.id==='ascendidox').rarity,'xtraultra');
   const codeProgress=progression.emptyBadgeProgress();
   assert(progression.awardBadges(codeProgress,'multiplayer','triple-code').some(b=>b.id==='triple-signal'));
@@ -338,4 +338,28 @@ test('RamYraM remembers one-to-five digits, quizzes at a future prime and applie
  r.encounters.memory={...trial,phase:'quiz'};h.act.answerMemory(trial.number);assert.equal(r.boons.length,before+1);assert.equal(r.encounters.memory,null);
  const events=h.load(path.join(root,'app/entityEvents.ts'));
  for(const roll of [0,.1,.5,.999999]){const t=events.createMemoryTrial(40,()=>roll);assert.match(t.number,/^\d{1,5}$/);assert.equal(new Set(t.choices).size,4);assert(t.quizRoom>40);}
+});
+
+test('LORE route offers the blood vial, saves ReDox, reaches Ascended 50, reveals ten nightmares and awards + badge',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(17);
+ const r=h.runtime,p=h.load(path.join(root,'app/progression.ts'));
+ const lore=h.load(path.join(root,'app/loreRoute.ts'));
+ assert.equal(lore.LORE_NIGHTMARES.length,10);
+ assert.equal(lore.serpAdvice('void',16,7,'dormant').percent,8);
+ assert.match(lore.serpAdvice('void',16,7,'dormant').next,/Offer carried crystals/);
+ const archive=r.stations.find(s=>s.kind==='archive')||{kind:'archive',object:new THREE.Group()};r.stations.push(archive);
+ r.inventory.sang=1;const offer={kind:'lore',object:new THREE.Group()};r.stations.push(offer);r.nearest={kind:'station',index:r.stations.indexOf(offer)};h.act.interact();
+ assert.equal(r.inventory.sang,0);assert.equal(r.loreRoute.phase,'armed');
+ const rainbow={kind:'rainbow',object:new THREE.Group()};r.stations.push(rainbow);r.nearest={kind:'station',index:r.stations.indexOf(rainbow)};h.act.interact();
+ assert.equal(r.room,300);assert.equal(r.loreRoute.phase,'redox');assert.equal(r.resonatorWorld,false);
+ h.act.saveRun();h.act.loadSlot(0);h.act.confirmBoons();assert.equal(r.room,300);assert.equal(r.loreRoute.phase,'redox');
+ const slot=JSON.parse(h.saved.get('ion-saves-v1'))[0].state;
+ h.saved.set('ion-checkpoint',JSON.stringify({...slot,room:400,loreRoute:{phase:'redox',door:400,scene:0}}));r.room=400;r.checkpoint=null;h.act.restartCheckpoint();h.act.confirmBoons();
+ r.transition=.01;h.step(.1);assert.equal(r.loreRoute.phase,'ascended');assert.equal(r.room,1);
+ h.saved.set('ion-checkpoint',JSON.stringify({...slot,room:50,ascendedWorld:true,ascendedDoor:50,loreRoute:{phase:'ascended',door:50,scene:0}}));r.room=50;r.checkpoint=null;h.act.restartCheckpoint();h.act.confirmBoons();
+ r.transition=.01;h.step(.1);assert.equal(r.room,201);assert.equal(r.loreRoute.phase,'reveal');assert.equal(h.screen(),'lore');
+ for(let i=0;i<10;i++)h.act.nextLoreScene();assert.equal(r.loreRoute.phase,'mega');assert.equal(r.room,300);assert.equal(r.resonatorWorld,true);
+ r.enemies.forEach(e=>e.alive=false);r.noiseActive=false;r.noiseCount=5;r.doorUnlocked=true;r.nearest={kind:'door'};h.act.interact();r.transition=.01;h.step(.1);
+ assert.equal(r.loreRoute.phase,'complete');assert(JSON.parse(h.saved.get('ion-badges-v1')).unlocked.includes('ten-souls-one-heartbeat'));
+ assert.equal(p.BADGES.find(b=>b.id==='ten-souls-one-heartbeat').rarity,'plus');
 });

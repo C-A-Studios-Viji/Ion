@@ -13,6 +13,7 @@ import { PartyLink, hasTripleDigit, validPartyCode, type PartyMessage, type Pose
 import { goldBarSpawns, paradoxEncounter, isPrimeDoor } from "./paradox";
 
 import { BOONS, negativeBoons, candyOutcome, boonDoorStep, type BoonId } from "./boons";
+import { emptyLoreRoute, LORE_NIGHTMARES, serpAdvice, type LoreRoute } from "./loreRoute";
 import { emptyEntityEvents, createMemoryTrial, payVoid, type EntityEvents } from "./entityEvents";
 import { permissionDay, verifyPermission } from "./badgePermission";
 
@@ -41,6 +42,7 @@ type Screen =
   | "inventory"
   | "banish"
   | "saves"
+  | "lore"
   | "memory"
   | "boons"
   | "badges"
@@ -89,6 +91,7 @@ type HudState = {
   blobDistance: number;
   deathReason: string;
   haidIniActive: boolean;
+  loreRoute:LoreRoute;
   encounters: EntityEvents;
   boons: BoonId[];
   resonatorWorld: boolean;
@@ -119,7 +122,7 @@ type Pickup = {
 
 type Station = {
   object: THREE.Group;
-  kind: "crafter" | "infusionsmith" | "archive" | "resonator" | "trapdoor" | "pershub" | "rift" | "cabinet" | "blood" | "rainbow" | "voiddoor" | "voidoffering";
+  kind: "crafter" | "infusionsmith" | "archive" | "resonator" | "trapdoor" | "pershub" | "rift" | "cabinet" | "blood" | "rainbow" | "voiddoor" | "voidoffering" | "lore";
   activated?: boolean;
   needsShield?: boolean;
 };
@@ -245,6 +248,7 @@ type Runtime = {
   winQuestArmed: boolean;
   winQuestBlob: boolean;
   winBadgeSpawned: boolean;
+  loreRoute:LoreRoute;
   encounters: EntityEvents;
   boons: BoonId[];
   resonatorWorld: boolean;
@@ -274,6 +278,7 @@ type Runtime = {
 };
 
 type SaveData = {
+  loreRoute?:LoreRoute;
   encounters?: EntityEvents;
   boons?: BoonId[];
   resonatorWorld?: boolean;
@@ -356,6 +361,8 @@ type ActionApi = {
   confirmBoons: () => void;
   rememberNumber: () => void;
   answerMemory: (answer:string) => void;
+  nextLoreScene: () => void;
+  offerLore: () => void;
   offerVoid: () => void;
   completeArchive: () => void;
   leaveParty: () => void;
@@ -602,7 +609,7 @@ const INITIAL_HUD: HudState = {
   blobDistance: 99,
   deathReason: "CONTACT LOST",
   haidIniActive: false,
-  encounters:emptyEntityEvents(), boons: [], resonatorWorld:false, inventory: EMPTY_INVENTORY(),
+  loreRoute:emptyLoreRoute(),encounters:emptyEntityEvents(), boons: [], resonatorWorld:false, inventory: EMPTY_INVENTORY(),
   basdinos: 0,
   wardCharges: 0,
   speedBoostRooms: 0,
@@ -862,7 +869,7 @@ export default function IonGame() {
       paradoxBlobRoom:false, paradoxGrinEncountered:false,
       ascendedWorld:false,ascendedDoor:0,ascendedOriginRoom:1,ascendedFromParadox:false,goldBarPresent:false,
       ascendedCleared:false,winQuestArmed:false,winQuestBlob:false,winBadgeSpawned:false,
-      encounters:emptyEntityEvents(), boons: [], resonatorWorld:false, platforms:[],fireballs:[],fireballTimer:0,boonieMet:false, inventory: EMPTY_INVENTORY(), basdinos: 0, basdinoModels: [],
+      loreRoute:emptyLoreRoute(),encounters:emptyEntityEvents(), boons: [], resonatorWorld:false, platforms:[],fireballs:[],fireballTimer:0,boonieMet:false, inventory: EMPTY_INVENTORY(), basdinos: 0, basdinoModels: [],
       wardCharges: 0, speedBoostRooms: 0, banishedUntil: {},
       lastFrame: performance.now(), hudTimer: 0, footstepTimer: 0, gunKick: 0, transition: 0, transitionDirection: 0,
       gunModel, clock: new THREE.Clock(), audio: null, checkpoint: null,
@@ -900,17 +907,17 @@ export default function IonGame() {
     party.onDisconnect=()=>{runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;updateHud(true);};
     party.onMessage=(message:PartyMessage)=>{
       if(message.type==="pose"){
-        if(message.pose?.room>=1 && (message.pose.room<=200||message.pose.room===300) && Number.isFinite(message.pose.x))runtime.remotePose=message.pose;
+        if(message.pose?.room>=1 && (message.pose.room<=400) && Number.isFinite(message.pose.x))runtime.remotePose=message.pose;
         return;
       }
       if(message.type==="hello" && party.role==="guest"){
         const state=message.state as SaveData;
-        if(!Number.isInteger(state?.room)||state.room<1||(state.room>200&&!(state.room===300&&state.resonatorWorld)))return;
+        if(!Number.isInteger(state?.room)||state.room<1||(state.room>200&&!(state.room===300&&state.resonatorWorld)&&!(state.room<=400&&state.loreRoute?.phase==='redox')&&!(state.room===201&&state.loreRoute?.phase==='reveal')))return;
         runtime.remotePose=message.pose;runtime.dead=false;runtime.won=false;applySave(state);start(false);return;
       }
       if(message.type==="room" && party.role==="guest"){
         const state=message.state as SaveData;
-        if(!Number.isInteger(state?.room)||state.room<1||(state.room>200&&!(state.room===300&&state.resonatorWorld)))return;
+        if(!Number.isInteger(state?.room)||state.room<1||(state.room>200&&!(state.room===300&&state.resonatorWorld)&&!(state.room<=400&&state.loreRoute?.phase==='redox')&&!(state.room===201&&state.loreRoute?.phase==='reveal')))return;
         runtime.dead=false;runtime.transition=0;applySave(state);start(false);return;
       }
       if(message.type==="request-room" && party.role==="host"){
@@ -937,7 +944,7 @@ export default function IonGame() {
           runtime.dead=false;runtime.spawnGrace=4;runtime.running=true;showScreen(null);notify("YOUR TEAMMATE REVIVED YOU");return;
         }
         if(message.action==="door"){
-          if(runtime.doorUnlocked){runtime.doorOpening=true;if(runtime.ascendedWorld&&runtime.ascendedDoor===20)runtime.ascendedCleared=true;runtime.audio?.pulse("door");}return;
+          if(runtime.doorUnlocked){runtime.doorOpening=true;if(runtime.ascendedWorld&&runtime.ascendedDoor===20&&runtime.loreRoute.phase!=='ascended')runtime.ascendedCleared=true;runtime.audio?.pulse("door");}return;
         }
         if(!Number.isInteger(message.id)||message.id===undefined||message.id<0)return;
         if(message.action==="pickup"){
@@ -995,7 +1002,7 @@ export default function IonGame() {
         grinRoom: runtime.grinRoom, grinTeleportIn: grin ? Math.max(0, 15 - grin.phase) : 0,
         grinWarning: runtime.grinIncoming, grinWarningIn: runtime.grinWarningTimer, hiding: runtime.hiding,
         chaseLevel: runtime.chaseLevel, blobDistance, haidIniActive: runtime.haidIniActive,
-        encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,inventory: { ...runtime.inventory }, basdinos: runtime.basdinos, wardCharges: runtime.wardCharges,
+        loreRoute:{...runtime.loreRoute},encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,inventory: { ...runtime.inventory }, basdinos: runtime.basdinos, wardCharges: runtime.wardCharges,
         speedBoostRooms: runtime.speedBoostRooms,
         badgeCount: badgesRef.current.unlocked.length, partyCode: partyRef.current?.code ?? "", partyConnected: Boolean(partyRef.current?.connection?.open),
         playerName:party.playerName,teammateName:runtime.remotePose?.name??"",
@@ -1459,7 +1466,7 @@ export default function IonGame() {
         const platform=addMesh(new THREE.BoxGeometry(i<2||i>24?14:4.5,.45,i<2||i>24?12:4.3),mat.clone(),new THREE.Vector3(x,-.225,z));runtime.platforms.push(new THREE.Box3().setFromObject(platform));
         if(i>1&&i%5===0)makePickup("specimen",new THREE.Vector3(x,.9,z));
       }
-      Object.keys(MONSTER_NAMES).filter(kind=>kind!=="boonie").forEach((kind,i)=>{addEnemy(kind as EnemyKind,()=>.5);const e=runtime.enemies[runtime.enemies.length-1];e.object.position.set((i%3-1)*2,0,runtime.roomLength/2+8+i*1.2);e.speed=kind==="haidini"?1.1:kind==="blob"||kind==="remetons"?currentSprintSpeed()*.87:3.5;});
+      Object.keys(MONSTER_NAMES).filter(kind=>kind!=="boonie"&&kind!=="lore"&&kind!=="serp").forEach((kind,i)=>{addEnemy(kind as EnemyKind,()=>.5);const e=runtime.enemies[runtime.enemies.length-1];e.object.position.set((i%3-1)*2,0,runtime.roomLength/2+8+i*1.2);e.speed=kind==="haidini"?1.1:kind==="blob"||kind==="remetons"?currentSprintSpeed()*.87:3.5;});
       runtime.haidIniActive=false;runtime.grinIncoming=false;runtime.chaseRoom=true;runtime.spawnGrace=3;runtime.doorUnlocked=false;runtime.objective="RESONATOR · FLOATING PLATFORMS · FIVE SPECIMENS · FIREBALL RAIN";
     }
     function updateResonatorTrial(dt:number){
@@ -1581,7 +1588,7 @@ export default function IonGame() {
       runtime.chaseRoom = !!runtime.chaseState; runtime.chaseLevel = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).level : 0;
       if (runtime.chaseState) runtime.roomName = `${runtime.chaseState.type === "remetons" ? "Infected Pers" : "Blob"} Pursuit · ${room-runtime.chaseState.start+1}/5`;
       if(runtime.paradoxWorld)runtime.roomName=`*${String(room).padStart(3,"0")} · ${runtime.roomName.split("").reverse().join("")}`;
-      if(runtime.ascendedWorld)runtime.roomName=`ASCENDED ${String(runtime.ascendedDoor).padStart(2,"0")} · AUREATE PASSAGE`;
+      if(runtime.ascendedWorld)runtime.roomName=`${runtime.loreRoute.phase==='ascended'?":Ascended:":"ASCENDED"} ${String(runtime.ascendedDoor).padStart(2,"0")} · AUREATE PASSAGE`;
       if(runtime.paradoxWorld)document.body.dataset.paradox="true";else delete document.body.dataset.paradox;
       if(runtime.ascendedWorld)document.body.dataset.ascended="true";else delete document.body.dataset.ascended;
       runtime.persHubActive = room === 32 && !runtime.paradoxWorld && !runtime.ascendedWorld;
@@ -1591,6 +1598,8 @@ export default function IonGame() {
       if (runtime.haidIniActive) runtime.roomName = "Haid-Ini Resonance Lockdown";
       runtime.roomWidth = runtime.chaseRoom ? Math.max(10.8, 15.5 - runtime.chaseLevel * 0.42) : Math.max(11.6, 18 - runtime.tier * 0.72 + rand() * 2.2);
       runtime.roomLength = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).length : 23 + rand() * 6 + runtime.tier * 0.35;
+      if(runtime.loreRoute.phase==='redox')runtime.roomName=`:::ReDox::: · DOOR ${room} / 400`;
+      if(runtime.loreRoute.phase==='reveal')runtime.roomName="LORE · DOOR 201 · TEN SOULS";
       if(runtime.resonatorWorld){runtime.roomWidth=18;runtime.roomLength=140;runtime.roomName="RESONATOR · DOOR 300 · CONVERGENCE";}
       runtime.roomHeight = runtime.chaseRoom ? 8.2 : Math.max(4.7, 7 - runtime.tier * 0.24 + rand());
       runtime.doorOpening = false; runtime.doorProgress = 0; runtime.mandatoryCrystal = MILESTONES[room] ?? null;
@@ -1829,16 +1838,30 @@ export default function IonGame() {
       if(runtime.paradoxWorld && room===200){
         runtime.doorUnlocked=false;runtime.doorOpening=false;
         runtime.objective="*200 · SURVIVE THE GRIN THEN ENTER THE RETURN RIFT";updateDoorIndicator();
-      } else if (room === 200) {
+      } else if (room === 200 && runtime.loreRoute.phase!=='redox') {
         if (runtime.discovered.size === CRYSTAL_KEYS.length) {
           runtime.won = true; runtime.running = false; showScreen("win"); if (document.pointerLockElement) document.exitPointerLock();
         } else { runtime.doorUnlocked = false; runtime.objective = `Extraction denied · ${runtime.discovered.size}/7 infusions`; }
       }
       buildEntityEvents(restore);
+      if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
       if(!restore && activeSlotRef.current !== null) saveRun(false);
       if(partyRef.current?.role==="host" && partyRef.current.connection?.open)partyRef.current.send({type:"room",state:snapshot()});
     }
 
+    function offerLore(){
+      if(runtime.loreRoute.phase!=='dormant'){notify("LORE HAS ALREADY HEARD YOUR OFFERING");return;}
+      if(runtime.inventory.sang<1){notify("OFFER A VIAL OF SÁNG TO THE ARCHIVE");return;}
+      runtime.inventory.sang--;runtime.loreRoute.phase='armed';
+      const actor=createEntityModel('lore');actor.position.set(0,0,-3);runtime.roomGroup.add(actor);
+      notify("LORE AWAKENED · FIND THE RAINBOW RESONATOR AT A PRIME DOOR");updateHud(true);saveRun(false);
+    }
+    function nextLoreScene(){
+      if(runtime.loreRoute.phase!=='reveal')return;
+      runtime.loreRoute.scene++;
+      if(runtime.loreRoute.scene>=LORE_NIGHTMARES.length){runtime.loreRoute.phase='mega';runtime.resonatorWorld=true;runtime.running=true;showScreen(null);buildRoom(300);notify("TEN SOULS EMERGE · THE MEGA CHASE BEGINS");}
+      else {updateHud(true);saveRun(false);}
+    }
     function voidBlocked(){if(runtime.encounters.voidDebt){notify("VOID · OFFER 50 TOTAL CRYSTALS TO RELEASE EQUIPMENT AND STATIONS");return true;}return false;}
     function offerVoid(){
       if(party.role==="guest"){notify("THE HOST MUST PAY VOID");return;}
@@ -1876,13 +1899,16 @@ export default function IonGame() {
         addEnemy("ramyram",()=>.5);runtime.enemies[runtime.enemies.length-1].object.position.copy(runtime.player).add(new THREE.Vector3(0,-1.65,-3));
         runtime.running=false;runtime.keysDown.clear();updateHud(true);showScreen("memory");if(document.pointerLockElement)document.exitPointerLock();
       }
+      if(runtime.roomName.includes("Crystal Archive")&&runtime.loreRoute.phase==='dormant'){
+        const plinth=new THREE.Group();plinth.position.set(-2,0,-1);plinth.add(createEntityModel('lore'));runtime.roomGroup.add(plinth);runtime.stations.push({kind:'lore',object:plinth,activated:false});
+      }
       if(runtime.boons.includes("fogbank")&&scene.fog instanceof THREE.FogExp2)scene.fog.density*=1.7;
       updateHud(true);
     }
     function snapshot(): SaveData {
       return { chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
         discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion, lightInfusion: runtime.lightInfusion,
-        encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,boonieMet:runtime.boonieMet,accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
+        loreRoute:{...runtime.loreRoute},encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,boonieMet:runtime.boonieMet,accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
         wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil },
         openedCabinets:runtime.stations.flatMap((s,i)=>s.kind==="cabinet"&&s.activated?[i]:[]),
         removedPickups:[...runtime.removedPickups], activatedResonators:runtime.stations.flatMap((s,i)=>s.kind==="resonator"&&s.activated?[i]:[]),
@@ -1901,7 +1927,7 @@ export default function IonGame() {
     }
     function applySave(save: SaveData) {
       runtime.chaseState = save.chaseState ?? null;
-      runtime.encounters=JSON.parse(JSON.stringify(save.encounters??emptyEntityEvents()));runtime.boons=[...(save.boons??[])];runtime.resonatorWorld=save.resonatorWorld??false;runtime.boonieMet=save.boonieMet??false;
+      runtime.loreRoute={...(save.loreRoute??emptyLoreRoute())};runtime.encounters=JSON.parse(JSON.stringify(save.encounters??emptyEntityEvents()));runtime.boons=[...(save.boons??[])];runtime.resonatorWorld=save.resonatorWorld??false;runtime.boonieMet=save.boonieMet??false;
       runtime.ammo = save.ammo; runtime.battery = save.battery; runtime.crystals = { ...save.crystals };
       runtime.discovered = new Set(save.discovered); runtime.gunInfusion = save.gunInfusion; runtime.lightInfusion = save.lightInfusion;
       runtime.accessKeys = save.accessKeys;
@@ -1923,7 +1949,7 @@ export default function IonGame() {
       runtime.ammo = 6; runtime.maxAmmo = 8; runtime.battery = 100; runtime.crystals = EMPTY_COUNTS(); runtime.discovered.clear();
       runtime.gunInfusion = null; runtime.lightInfusion = null; runtime.accessKeys = 0;
       runtime.grinRoom = -1; runtime.grinTargetRoom = -1; runtime.grinTeleportTimer = 0; runtime.grinWarningTimer = 0; runtime.grinIncoming = false; runtime.hiding = false;
-      runtime.encounters=emptyEntityEvents();runtime.boons=[];runtime.resonatorWorld=false;runtime.boonieMet=false;
+      runtime.loreRoute=emptyLoreRoute();runtime.encounters=emptyEntityEvents();runtime.boons=[];runtime.resonatorWorld=false;runtime.boonieMet=false;
       runtime.inventory = EMPTY_INVENTORY(); runtime.basdinos = 0; runtime.wardCharges = 0; runtime.speedBoostRooms = 0; runtime.banishedUntil = {};
       runtime.paradoxWorld=false;runtime.paradoxJar=false;runtime.paradoxJarEquipped=false;runtime.paradoxEssence=false;
       runtime.paradoxRift=false;runtime.paradoxBlobRoom=false;runtime.paradoxGrinEncountered=false;
@@ -2031,6 +2057,7 @@ export default function IonGame() {
       if (fresh) resetRun(); if (!runtime.audio) runtime.audio = new AudioEngine(); runtime.audio.resume();
       runtime.running = true; runtime.dead = false; showScreen(null);
       if(fresh){chosenBoons.current.forEach(applyBoon);if(!runtime.dead)buildRoom(1);}
+      if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
       if(runtime.encounters.memory?.phase==="reveal"||runtime.encounters.memory?.phase==="quiz"){runtime.running=false;showScreen("memory");}
       if(activeSlotRef.current!==null)saveRun(false);
       if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock(); updateHud(true);
@@ -2204,11 +2231,23 @@ export default function IonGame() {
     }
     function advanceDimension(){
       if(runtime.encounters.voidDebt){buildRoom(Math.min(199,runtime.room+1));return;}
+      if(runtime.loreRoute.phase==='redox'){
+        if(runtime.room>=400){runtime.loreRoute.phase='ascended';runtime.loreRoute.door=1;runtime.ascendedWorld=true;runtime.ascendedDoor=1;runtime.chaseState=null;buildRoom(1);notify(":ASCENDED: · FIFTY DOORS");}
+        else {runtime.loreRoute.door=runtime.room+1;buildRoom(runtime.room+1);}return;
+      }
+      if(runtime.loreRoute.phase==='ascended'){
+        if(runtime.ascendedDoor>=50){runtime.ascendedWorld=false;runtime.loreRoute.phase='reveal';runtime.loreRoute.door=201;runtime.loreRoute.scene=0;buildRoom(201);notify("LORE · THE NIGHTMARES OF TEN SOULS");}
+        else buildRoom(runtime.room+1);return;
+      }
+      if(runtime.loreRoute.phase==='mega'&&runtime.resonatorWorld){
+        runtime.loreRoute.phase='complete';badge('secret','lore-finale');runtime.resonatorWorld=false;escapeToHome();return;
+      }
       if(runtime.ascendedWorld&&runtime.ascendedDoor>=20){finishAscended();return;}
       if(runtime.resonatorWorld){badge("secret","resonator-victory");runtime.resonatorWorld=false;escapeToHome();return;}
       buildRoom(Math.min(200,runtime.room+boonDoorStep(runtime.boons,runtime.chaseRoom)));
     }
     function openStation(kind: Station["kind"], station?: Station) {
+      if(kind==="lore"){offerLore();return;}
       if(kind==="voidoffering"){offerVoid();return;}
       if(kind==="voiddoor"){
         if(!runtime.encounters.voidDebt)return;
@@ -2217,6 +2256,10 @@ export default function IonGame() {
       }
       if(voidBlocked())return;
       if(kind==="rainbow"){
+        if(runtime.loreRoute.phase==='armed'){
+          runtime.loreRoute.phase='redox';runtime.loreRoute.door=300;runtime.resonatorWorld=false;
+          runtime.ascendedWorld=false;runtime.paradoxWorld=false;runtime.chaseState=null;buildRoom(300);notify(":::REDOX::: · REACH DOOR 400");return;
+        }
         if(party.role==="guest"){notify("THE HOST MUST ACTIVATE THE RAINBOW RESONATOR");return;}
         runtime.resonatorWorld=true;runtime.paradoxWorld=false;runtime.ascendedWorld=false;runtime.chaseState=null;buildRoom(300);notify("OPTIONAL TRIAL · ALL ENTITIES · REACH THE EXIT");return;
       }
@@ -2294,7 +2337,7 @@ export default function IonGame() {
       if(nearest.kind==="teammate" && runtime.remotePose?.dead){partyRef.current?.send({type:"action",room:runtime.room,action:"revive"});runtime.remotePose.dead=false;badge("revive");notify("TEAMMATE REVIVED");}
       if (nearest.kind === "door") {
         if(runtime.encounters.voidDebt){notify("VOID SEALED THIS EXIT · USE ONE OF THE FIVE VOID DOORS");return;}
-        if(runtime.room===200){
+        if(runtime.room===200&&runtime.loreRoute.phase!=='redox'){
           if(!runtime.paradoxWorld){escapeToHome();return;}
           notify("THE RETURN RIFT IS YOUR ONLY EXIT");return;
         }
@@ -2302,7 +2345,7 @@ export default function IonGame() {
         if (runtime.haidIniActive && runtime.activeResonators < 30) { runtime.audio?.pulse("error"); notify("HAID-INI LOCKDOWN · CRYSTAL KEYS REJECTED"); return; }
         if (!runtime.doorUnlocked && runtime.accessKeys > 0&&!runtime.boons.includes("nokeys")) { runtime.accessKeys -= 1; runtime.doorUnlocked = true; updateDoorIndicator(); notify("CRYSTAL KEY ACCEPTED"); }
         if (runtime.doorUnlocked) { runtime.doorOpening = true;
-          if(runtime.ascendedWorld&&runtime.ascendedDoor===20){runtime.ascendedCleared=true;runtime.objective="ASCENDED CLEARED · SHOOT PERS BEFORE CROSSING FOR THE SECRET TRIAL";}
+          if(runtime.ascendedWorld&&runtime.ascendedDoor===20&&runtime.loreRoute.phase!=='ascended'){runtime.ascendedCleared=true;runtime.objective="ASCENDED CLEARED · SHOOT PERS BEFORE CROSSING FOR THE SECRET TRIAL";}
           else runtime.objective = "Proceed to the next room";
           partyRef.current?.send({type:"action",room:runtime.room,action:"door"}); runtime.audio?.pulse("door"); }
         else { runtime.audio?.pulse("error"); notify(runtime.objective.toUpperCase()); }
@@ -2430,7 +2473,7 @@ export default function IonGame() {
     actionRef.current = { start, resume, interact, fire, toggleLight, jump, close, craft, infuse, synthesizeFluorite,
       buyPersItem, buyBasdino, openInventory, useItem, banish, restartCheckpoint,
       toggleJar,exploreExtraction,
-      confirmBoons,rememberNumber,answerMemory,offerVoid,startNewSlot,loadSlot,saveRun:()=>saveRun(true),hostParty,joinParty,redeemBadgeCode,grantBadge,toggleBoon,completeArchive,leaveParty,openBadges,closeBadges,
+      confirmBoons,rememberNumber,answerMemory,offerVoid,offerLore,nextLoreScene,startNewSlot,loadSlot,saveRun:()=>saveRun(true),hostParty,joinParty,redeemBadgeCode,grantBadge,toggleBoon,completeArchive,leaveParty,openBadges,closeBadges,
       touchMoveStart, touchMoveUpdate, touchMoveEnd, touchLookStart, touchLookUpdate, touchLookEnd,
       setSprint: (value) => { runtime.touchMove.sprint = value; } };
 
@@ -2444,7 +2487,7 @@ export default function IonGame() {
       runtime.stations.forEach((station, index) => {
         const distance = station.object.position.distanceTo(runtime.player);
         if (distance < bestDistance && !(station.activated && (station.kind === "resonator" || station.kind === "cabinet"))) { bestDistance = distance; runtime.nearest = { kind: "station", index };
-          runtime.prompt = station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
+          runtime.prompt = station.kind === "lore" ? "E  OFFER VIAL OF SÁNG TO LORE" : station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
             : station.kind === "trapdoor" ? runtime.chaseRoom ? "TRAPDOOR JAMMED · KEEP RUNNING" : runtime.haidIniActive ? runtime.hiding ? "E  EXIT · HAID-INI CAN ENTER" : "E  HIDE · UNSAFE FROM HAID-INI" : runtime.hiding ? "E  EXIT TRAPDOOR" : "E  HIDE IN TRAPDOOR"
             : station.kind === "resonator" ? station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  TUNE · RESONATION SHIELD REQUIRED" : "E  TUNE RESONATOR"
             : `E  USE ${station.kind.replace("infusionsmith", "INFUSIONSMITH").toUpperCase()}`; }
@@ -2533,7 +2576,7 @@ export default function IonGame() {
           notify("GRIN DEPARTED · YOU CAN LEAVE THE TRAPDOOR"); updateHud(true);
           return;
         }
-        if(enemy.kind==="boonie"||enemy.kind==="void"||enemy.kind==="ramyram"){animateMonster(enemy.object,performance.now()*.001);return;}
+        if(enemy.kind==="boonie"||enemy.kind==="void"||enemy.kind==="ramyram"||enemy.kind==="lore"||enemy.kind==="serp"){animateMonster(enemy.object,performance.now()*.001);return;}
         const toPlayer = runtime.player.clone().sub(enemy.object.position);toPlayer.y=0;
         const localDistance=toPlayer.length();
         if(party.role==="host" && runtime.remotePose?.room===runtime.room && !runtime.remotePose.dead){
@@ -2795,7 +2838,7 @@ export default function IonGame() {
       <div className="fog-layer" /><div className="scanlines" /><div className="vignette" />
       <div className="crosshair" aria-hidden="true"><i /><b /></div>
       {!screen ? <>
-        <section className="hud hud-top-left" aria-label="Location"><span className="eyebrow">{hud.ascendedWorld?"ASCENDED DOOR ":hud.paradoxWorld?"DOOR *":"ROOM "}{String(hud.ascendedWorld?hud.ascendedDoor:hud.room).padStart(hud.ascendedWorld?2:3, "0")} / {hud.ascendedWorld?20:200}</span><strong>{hud.roomName}</strong><small>{hud.ascendedWorld?"AUREATE SIGNAL":hud.paradoxWorld?"INVERTED SIGNAL":hud.tier} · {hud.objective}</small></section>
+        <section className="hud hud-top-left" aria-label="Location"><span className="eyebrow">{hud.ascendedWorld?"ASCENDED DOOR ":hud.paradoxWorld?"DOOR *":"ROOM "}{String(hud.ascendedWorld?hud.ascendedDoor:hud.room).padStart(hud.ascendedWorld?2:3, "0")} / {hud.loreRoute.phase==='redox'?400:hud.loreRoute.phase==='ascended'?50:hud.ascendedWorld?20:200}</span><strong>{hud.roomName}</strong><small>{hud.ascendedWorld?"AUREATE SIGNAL":hud.paradoxWorld?"INVERTED SIGNAL":hud.tier} · {hud.objective}</small></section>
         <section className="hud hud-top-right" aria-label="Equipment inventory">
           <div className="equipment-line"><span>ION RIFLE</span><strong>{String(hud.ammo).padStart(2, "0")}<i>/ {hud.maxAmmo}</i></strong></div>
           <div className="battery-line"><span>FLASHLIGHT</span><div><i style={{ width: `${hud.battery}%` }} /></div><strong>{Math.ceil(hud.battery)}%</strong></div>
@@ -2848,14 +2891,15 @@ export default function IonGame() {
         </div>
       </section>}
       {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyCode||"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
-      {screen === "dead" && <section className="death-screen creature-death overlay-panel compact-panel" data-scare={hud.deathKind} style={{"--scare-color":`#${MONSTER_COLORS[hud.deathKind].toString(16).padStart(6,"0")}`} as React.CSSProperties}><div className="scare-distortion" aria-hidden="true" /><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>{MONSTER_NAMES[hud.deathKind]}</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div>{hud.partyConnected&&<p>YOUR TEAMMATE CAN REVIVE YOU NEARBY</p>}<button className="primary-button danger-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.restartCheckpoint();}}>RETURN TO CHECKPOINT SOLO</button><button className="text-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.start(true);}}>NEW DESCENT</button></div></section>}
+      {screen === "dead" && <section className="death-screen creature-death overlay-panel compact-panel" data-scare={hud.deathKind} style={{"--scare-color":`#${MONSTER_COLORS[hud.deathKind].toString(16).padStart(6,"0")}`} as React.CSSProperties}><div className="scare-distortion" aria-hidden="true" /><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>{MONSTER_NAMES[hud.deathKind]}</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div><div className="serp-review"><div className="serp-face" aria-label="SERP, a figure carrying a yellow light"><i /></div><strong>SERP · A LIGHT AFTER THE END</strong><p>{serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).well}</p><p>{serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).percent}% of this route completed.</p><p>Next time: {serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).next}</p></div>{hud.partyConnected&&<p>YOUR TEAMMATE CAN REVIVE YOU NEARBY</p>}<button className="primary-button danger-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.restartCheckpoint();}}>RETURN TO CHECKPOINT SOLO</button><button className="text-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.start(true);}}>NEW DESCENT</button></div></section>}
       {screen === "saves" && <MenuShell title="SAVED RUNS" subtitle="Three independent local slots · rooms save automatically when entered" onClose={() => showScreen("start")}><div className="save-grid">
         {savedRuns.map((slot,index)=><article className="save-card" key={index}><small>SLOT {index+1}</small><strong>{slot?`ROOM ${String(slot.state.room).padStart(3,"0")}`:"EMPTY SLOT"}</strong><p>{slot?`Saved ${new Date(slot.savedAt).toLocaleString()} · ${slot.state.discovered?.length??0}/7 minerals`:"Start a new descent and save automatically."}</p>{slot&&<button onClick={()=>actionRef.current?.loadSlot(index)}>CONTINUE RUN</button>}<button className="secondary" onClick={()=>actionRef.current?.startNewSlot(index)}>{slot?"NEW RUN IN THIS SLOT":"START NEW RUN"}</button></article>)}
       </div></MenuShell>}
       {screen === "boons" && <MenuShell title="BOONS" subtitle="Choose Boons, then confirm to enter your run · Saved Boons remain active" onClose={()=>showScreen("saves")}><button className="primary-button" onClick={()=>actionRef.current?.confirmBoons()}>CONFIRM BOONS · ENTER RUN</button><div className="badge-grid">{BOONS.map(b=><article key={b.id} className={selectedBoons.includes(b.id)?"earned":""}><span>{b.negative?"NEGATIVE / CHALLENGE":"POSITIVE"}</span><strong>{b.name}</strong><p>{b.note}</p><button onClick={()=>actionRef.current?.toggleBoon(b.id)}>{selectedBoons.includes(b.id)?"REMOVE":"ACTIVATE"}</button></article>)}</div></MenuShell>}
+      {screen === "lore" && <MenuShell title="LORE · TEN SOULS" subtitle="Door 201 · each entity remembers its Pers form and the nightmare beneath it" onClose={()=>{}}><div className="lore-scene"><div className="lore-choir" aria-label="The ten entities in their Pers forms">{LORE_NIGHTMARES.map(([name],index)=><span key={name} className={index===hud.loreRoute.scene?"awakening":""} title={name}>✧<small>{name}</small></span>)}</div><div className="lore-pers">PERS FORM · {LORE_NIGHTMARES[hud.loreRoute.scene]?.[0]}</div><strong>{LORE_NIGHTMARES[hud.loreRoute.scene]?.[0]} EMERGES FROM BELOW</strong><p>{LORE_NIGHTMARES[hud.loreRoute.scene]?.[1]}</p><small>{hud.loreRoute.scene+1} / 10</small><button onClick={()=>actionRef.current?.nextLoreScene()}>{hud.loreRoute.scene===9?"BEGIN DOOR 300 MEGA CHASE":"REVEAL THE NEXT NIGHTMARE"}</button></div></MenuShell>}
       {screen === "memory" && <MenuShell title="X::::RamYraM::::X" subtitle={hud.encounters.memory?.phase==="quiz"?"Which number did I show you? A wrong answer grants a random negative Boon.":"Remember this number. I will ask again at a future prime door."} onClose={()=>{}}><div className="memory-trial">{hud.encounters.memory?.phase==="reveal"?<><strong className="memory-number">{hud.encounters.memory.number}</strong><button className="primary-button" onClick={()=>actionRef.current?.rememberNumber()}>I HAVE MEMORIZED IT · CONTINUE</button></>:hud.encounters.memory?.choices.map(answer=><button key={answer} onClick={()=>actionRef.current?.answerMemory(answer)}>{answer}</button>)}</div></MenuShell>}
       {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle={`You are ${hud.playerName} · two players · real-time WebRTC`} onClose={() => {if(runtimeRef.current?.room===1&&!partyRef.current?.code)showScreen("start");else showScreen("pause");}}><div className="party-panel"><p>{partyStatus}</p>{hud.partyCode&&<><div className="party-code">{hud.partyCode}</div><p>{hud.playerName}{hud.teammateName?` + ${hud.teammateName}`:" · WAITING FOR A NAMED SURVIVOR"}</p></>}<button onClick={() => void actionRef.current?.hostParty()} disabled={Boolean(hud.partyCode)}>HOST A ROOM</button><label htmlFor="ion-party-code">JOIN A FRIEND</label><div className="party-join"><input id="ion-party-code" inputMode="text" maxLength={6} value={partyInput} onChange={event=>setPartyInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,6))} placeholder="ROOM CODE" /><button disabled={!validPartyCode(partyInput)} onClick={()=>void actionRef.current?.joinParty(partyInput)}>ENTER</button></div><p className="party-note">Keep the host page open until the second randomized survivor name appears. Cross-network connections use multiple encrypted WebRTC routes automatically.</p>{hud.partyCode&&<button className="secondary" onClick={()=>{actionRef.current?.leaveParty();showScreen("pause");}}>LEAVE PARTY</button>}{hud.partyCode&&<button onClick={()=>actionRef.current?.resume()}>RETURN TO GAME</button>}</div></MenuShell>}
-      {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/${BADGES.length} unlocked · Daily permission required`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-code-panel"><label htmlFor="ion-badge-code">DAILY BADGE PERMISSION</label><div className="badge-code-entry"><input id="ion-badge-code" inputMode="text" maxLength={32} value={badgeInput} onChange={event=>setBadgeInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,32))} placeholder="DAILY PERMISSION"/><button disabled={!badgeInput} onClick={()=>actionRef.current?.redeemBadgeCode(badgeInput)}>AUTHORIZE</button></div><small>{permissionDate===permissionDay()?"Authorized today · select a badge below":"Badge awards are locked until today’s permission is entered."}</small></div><div className="badge-grid">{BADGES.map(b=>{const earned=badgeProgress.unlocked.includes(b.id);const rarity=b.rarity??"standard";const classified=rarity==="starplus"&&!earned&&permissionDate!==permissionDay();const rarityLabel=rarity==="starplus"?"*+*":rarity.toUpperCase();return <article key={b.id} className={`${earned?"earned":"locked"} badge-${rarity}`}><span>{earned?"★ EARNED":"◇ LOCKED"} · {rarityLabel}</span><strong>{classified?"CLASSIFIED":b.title}</strong><p>{classified?"This badge can only be given by a secret facility condition.":b.description}</p>{!classified&&b.tutorial&&<small>FIELD TUTORIAL: {b.tutorial}</small>}{!earned&&permissionDate===permissionDay()&&<button onClick={()=>actionRef.current?.grantBadge(b.id)}>SELECT THIS BADGE</button>}</article>})}</div></MenuShell>}
+      {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/${BADGES.length} unlocked · Daily permission required`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-code-panel"><label htmlFor="ion-badge-code">DAILY BADGE PERMISSION</label><div className="badge-code-entry"><input id="ion-badge-code" inputMode="text" maxLength={32} value={badgeInput} onChange={event=>setBadgeInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,32))} placeholder="DAILY PERMISSION"/><button disabled={!badgeInput} onClick={()=>actionRef.current?.redeemBadgeCode(badgeInput)}>AUTHORIZE</button></div><small>{permissionDate===permissionDay()?"Authorized today · select a badge below":"Badge awards are locked until today’s permission is entered."}</small></div><div className="badge-grid">{BADGES.map(b=>{const earned=badgeProgress.unlocked.includes(b.id);const rarity=b.rarity??"standard";const classified=rarity==="starplus"&&!earned&&permissionDate!==permissionDay();const rarityLabel=rarity==="starplus"?"*+*":rarity==="plus"?"+":rarity.toUpperCase();return <article key={b.id} className={`${earned?"earned":"locked"} badge-${rarity}`}><span>{earned?"★ EARNED":"◇ LOCKED"} · {rarityLabel}</span><strong>{classified?"CLASSIFIED":b.title}</strong><p>{classified?"This badge can only be given by a secret facility condition.":b.description}</p>{!classified&&b.tutorial&&<small>FIELD TUTORIAL: {b.tutorial}</small>}{!earned&&permissionDate===permissionDay()&&<button onClick={()=>actionRef.current?.grantBadge(b.id)}>SELECT THIS BADGE</button>}</article>})}</div></MenuShell>}
       {screen === "win" && <section className="win-screen overlay-panel"><span className="eyebrow">EXTRACTION ROOM · SIGNAL RESTORED</span><h2>YOU REACHED<br /><strong>ROOM 200</strong></h2><p>Every infusion is stable. The blast doors open. Something below them keeps smiling.</p><div className="completion-ring" style={{ "--completion": `${discoveredPercent}%` } as React.CSSProperties}><span>7 / 7</span><small>INFUSIONS</small></div><button className="primary-button" onClick={() => actionRef.current?.start(true)}>DESCEND AGAIN</button><button className="text-button" onClick={() => actionRef.current?.exploreExtraction()}>EXPLORE EXTRACTION</button></section>}
       {screen === "crafter" && <MenuShell title="CRYSTAL CRAFTER" subtitle="Convert finite specimens into survival equipment" onClose={() => actionRef.current?.close()}><div className="recipe-grid">
         <Recipe name="Toxic rounds ×4" cost="1 MAL" note="Restores rifle ammunition" onClick={() => actionRef.current?.craft("ammo")} />

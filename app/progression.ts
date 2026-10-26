@@ -5,7 +5,7 @@ export type BadgeEvent =
   | "pers_item" | "basdino" | "banish" | "multiplayer" | "revive" | "save" | "paradox"
   | "boon" | "gold" | "ascended" | "paradox_room" | "secret";
 
-export type BadgeRarity = "standard" | "rare" | "ultra" | "xtraultra" | "starplus";
+export type BadgeRarity = "standard" | "rare" | "ultra" | "xtraultra" | "starplus" | "plus";
 export type Badge = { id: string; title: string; description: string; tutorial?: string; event: BadgeEvent; target: number; detail?: string; rarity?: BadgeRarity };
 const milestones = [2, 5, 10, 20, 25, 50, 75, 100, 150, 200];
 const entities = ["entity", "blob", "haidini", "crawler", "watcher", "sound", "prism", "mimic", "wraith", "noise", "remetons"];
@@ -51,6 +51,7 @@ if (BADGES.length !== 125 || new Set(BADGES.map(b => b.id)).size !== 125) throw 
 // Exactly 40% of the archive is intentionally undocumented. Secret-tier records and
 // Ascendidox are always among them; the remainder is distributed across the catalog.
 BADGES.push(...negativeBoons.flatMap(boon=>Array.from({length:30},(_,i)=>({id:`boon-${boon.id}-${i+1}`,title:`${boon.name} · Trial ${i+1}`,description:`Cross ${(i+1)*5} doors with ${boon.name} active. Daily permission is required.`,event:"boon" as const,detail:boon.id,target:(i+1)*5,rarity:"xtraultra" as const,tutorial:`Activate ${boon.name} before the run and survive ${(i+1)*5} door advances.`}))));
+BADGES.push({id:'ten-souls-one-heartbeat',title:'10 Souls, 1 Heartbeat',description:'Survive the full LORE route and the final mega chase.',event:'secret',target:1,detail:'lore-finale',rarity:'plus'});
 const tutorialPriority=[...BADGES.filter(b=>b.rarity==="starplus"||b.id==="ascendidox"),...BADGES.filter((_,index)=>index%5===0||index%5===2),...BADGES];
 const tutoriallessIds=new Set<string>();
 for(const badge of tutorialPriority){if(tutoriallessIds.size>=BADGES.length*.4)break;tutoriallessIds.add(badge.id);}
@@ -82,7 +83,7 @@ export function readRunSlots<T>(storage: Pick<Storage,"getItem">): (RunSlot<T> |
     const data = JSON.parse(storage.getItem(RUN_STORAGE_KEY) ?? "null");
     return Array.from({length:3},(_,i)=>{
       const entry=data?.[i];
-      return Number.isFinite(entry?.savedAt) && Number.isInteger(entry?.state?.room) && entry.state.room>=1 && (entry.state.room<=200 || entry.state.room===300&&entry.state.resonatorWorld===true) ? entry : null;
+      return Number.isFinite(entry?.savedAt) && Number.isInteger(entry?.state?.room) && entry.state.room>=1 && (entry.state.room<=200 || entry.state.room===300&&entry.state.resonatorWorld===true || entry.state.room<=400&&entry.state.loreRoute?.phase==='redox' || entry.state.room===201&&entry.state.loreRoute?.phase==='reveal') ? entry : null;
     });
   } catch { return [null,null,null]; }
 }
