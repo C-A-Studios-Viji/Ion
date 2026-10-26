@@ -13,6 +13,7 @@ import { PartyLink, hasTripleDigit, validPartyCode, type PartyMessage, type Pose
 import { goldBarSpawns, paradoxEncounter, isPrimeDoor } from "./paradox";
 
 import { BOONS, negativeBoons, candyOutcome, boonDoorStep, type BoonId } from "./boons";
+import { emptyEntityEvents, createMemoryTrial, payVoid, type EntityEvents } from "./entityEvents";
 import { permissionDay, verifyPermission } from "./badgePermission";
 
 type CrystalKey =
@@ -40,6 +41,7 @@ type Screen =
   | "inventory"
   | "banish"
   | "saves"
+  | "memory"
   | "boons"
   | "badges"
   | "party"
@@ -87,6 +89,7 @@ type HudState = {
   blobDistance: number;
   deathReason: string;
   haidIniActive: boolean;
+  encounters: EntityEvents;
   boons: BoonId[];
   resonatorWorld: boolean;
   inventory: Record<ItemKey, number>;
@@ -116,7 +119,7 @@ type Pickup = {
 
 type Station = {
   object: THREE.Group;
-  kind: "crafter" | "infusionsmith" | "archive" | "resonator" | "trapdoor" | "pershub" | "rift" | "cabinet" | "blood" | "rainbow";
+  kind: "crafter" | "infusionsmith" | "archive" | "resonator" | "trapdoor" | "pershub" | "rift" | "cabinet" | "blood" | "rainbow" | "voiddoor" | "voidoffering";
   activated?: boolean;
   needsShield?: boolean;
 };
@@ -242,6 +245,7 @@ type Runtime = {
   winQuestArmed: boolean;
   winQuestBlob: boolean;
   winBadgeSpawned: boolean;
+  encounters: EntityEvents;
   boons: BoonId[];
   resonatorWorld: boolean;
   inventory: Record<ItemKey, number>;
@@ -270,6 +274,7 @@ type Runtime = {
 };
 
 type SaveData = {
+  encounters?: EntityEvents;
   boons?: BoonId[];
   resonatorWorld?: boolean;
   boonieMet?: boolean;
@@ -348,6 +353,10 @@ type ActionApi = {
   redeemBadgeCode: (code: string) => Promise<void>;
   grantBadge: (id:string) => void;
   toggleBoon: (id:BoonId) => void;
+  confirmBoons: () => void;
+  rememberNumber: () => void;
+  answerMemory: (answer:string) => void;
+  offerVoid: () => void;
   completeArchive: () => void;
   leaveParty: () => void;
   touchMoveStart: (x: number, y: number, id: number) => void;
@@ -593,7 +602,7 @@ const INITIAL_HUD: HudState = {
   blobDistance: 99,
   deathReason: "CONTACT LOST",
   haidIniActive: false,
-  boons: [], resonatorWorld:false, inventory: EMPTY_INVENTORY(),
+  encounters:emptyEntityEvents(), boons: [], resonatorWorld:false, inventory: EMPTY_INVENTORY(),
   basdinos: 0,
   wardCharges: 0,
   speedBoostRooms: 0,
@@ -853,7 +862,7 @@ export default function IonGame() {
       paradoxBlobRoom:false, paradoxGrinEncountered:false,
       ascendedWorld:false,ascendedDoor:0,ascendedOriginRoom:1,ascendedFromParadox:false,goldBarPresent:false,
       ascendedCleared:false,winQuestArmed:false,winQuestBlob:false,winBadgeSpawned:false,
-      boons: [], resonatorWorld:false, platforms:[],fireballs:[],fireballTimer:0,boonieMet:false, inventory: EMPTY_INVENTORY(), basdinos: 0, basdinoModels: [],
+      encounters:emptyEntityEvents(), boons: [], resonatorWorld:false, platforms:[],fireballs:[],fireballTimer:0,boonieMet:false, inventory: EMPTY_INVENTORY(), basdinos: 0, basdinoModels: [],
       wardCharges: 0, speedBoostRooms: 0, banishedUntil: {},
       lastFrame: performance.now(), hudTimer: 0, footstepTimer: 0, gunKick: 0, transition: 0, transitionDirection: 0,
       gunModel, clock: new THREE.Clock(), audio: null, checkpoint: null,
@@ -905,7 +914,7 @@ export default function IonGame() {
         runtime.dead=false;runtime.transition=0;applySave(state);start(false);return;
       }
       if(message.type==="request-room" && party.role==="host"){
-        if(message.room===runtime.room+1 && runtime.doorUnlocked){runtime.transition=0;advanceDimension();}
+        if(message.room===runtime.room+1 && (runtime.doorUnlocked||runtime.encounters.voidDebt)){runtime.transition=0;advanceDimension();}
         else if(message.room===runtime.room)party.send({type:"room",state:snapshot()});
         return;
       }
@@ -986,7 +995,7 @@ export default function IonGame() {
         grinRoom: runtime.grinRoom, grinTeleportIn: grin ? Math.max(0, 15 - grin.phase) : 0,
         grinWarning: runtime.grinIncoming, grinWarningIn: runtime.grinWarningTimer, hiding: runtime.hiding,
         chaseLevel: runtime.chaseLevel, blobDistance, haidIniActive: runtime.haidIniActive,
-        boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,inventory: { ...runtime.inventory }, basdinos: runtime.basdinos, wardCharges: runtime.wardCharges,
+        encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,inventory: { ...runtime.inventory }, basdinos: runtime.basdinos, wardCharges: runtime.wardCharges,
         speedBoostRooms: runtime.speedBoostRooms,
         badgeCount: badgesRef.current.unlocked.length, partyCode: partyRef.current?.code ?? "", partyConnected: Boolean(partyRef.current?.connection?.open),
         playerName:party.playerName,teammateName:runtime.remotePose?.name??"",
@@ -1549,6 +1558,13 @@ export default function IonGame() {
       }
       if(room>runtime.room)runtime.boons.filter(id=>negativeBoons.some(b=>b.id===id)).forEach(id=>badge("boon",id,room-runtime.room));
       const previousRoom = runtime.room;
+      if(!restore&&room>previousRoom){
+        if(runtime.boons.includes("stocked"))runtime.ammo=Math.min(runtime.maxAmmo,runtime.ammo+3);
+        if(runtime.boons.includes("recharge"))runtime.battery=Math.min(100,runtime.battery+20);
+        if(runtime.boons.includes("tithe")){const key=CRYSTAL_KEYS.find(k=>runtime.crystals[k]>0);if(key)runtime.crystals[key]--;}
+        const debt=runtime.encounters.voidDebt;
+        if(debt&&debt.lastRoom!==room){debt.doorsLeft-=Math.max(1,room-previousRoom);debt.lastRoom=room;}
+      }
       clearRoom(); const rand = seeded(room * 1931 + 71); runtime.room = room;
       runtime.paradoxRift=restore?.paradoxRift??false;
       runtime.paradoxGrinEncountered=restore?.paradoxGrinEncountered??false;
@@ -1583,6 +1599,7 @@ export default function IonGame() {
       runtime.noiseActive = !runtime.paradoxWorld && !runtime.persHubActive && !runtime.haidIniActive && room < 200 && (runtime.banishedUntil.noise ?? 0) < room && (runtime.chaseRoom || room > 10 && rand() < 0.12);
       if(restore?.noiseActive !== undefined)runtime.noiseActive=restore.noiseActive;
       runtime.noiseCount = 0; runtime.noiseTime = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).noiseSeconds : 42;
+      runtime.noiseTime *= (runtime.boons.includes("calm")?1.35:1)*(runtime.boons.includes("impatience")?.7:1);
       runtime.noisePulseTimer = 1;
       runtime.activeResonators = 0;
       runtime.doorUnlocked = room === 1 || room === 200 || (runtime.requiredResonators === 0 && runtime.mandatoryCollected);
@@ -1817,14 +1834,55 @@ export default function IonGame() {
           runtime.won = true; runtime.running = false; showScreen("win"); if (document.pointerLockElement) document.exitPointerLock();
         } else { runtime.doorUnlocked = false; runtime.objective = `Extraction denied · ${runtime.discovered.size}/7 infusions`; }
       }
+      buildEntityEvents(restore);
       if(!restore && activeSlotRef.current !== null) saveRun(false);
       if(partyRef.current?.role==="host" && partyRef.current.connection?.open)partyRef.current.send({type:"room",state:snapshot()});
     }
 
+    function voidBlocked(){if(runtime.encounters.voidDebt){notify("VOID · OFFER 50 TOTAL CRYSTALS TO RELEASE EQUIPMENT AND STATIONS");return true;}return false;}
+    function offerVoid(){
+      if(party.role==="guest"){notify("THE HOST MUST PAY VOID");return;}
+      const debt=runtime.encounters.voidDebt;if(!debt)return;
+      const paid=payVoid(debt,runtime.crystals);
+      if(debt.paid>=50){runtime.encounters.voidDebt=null;runtime.enemies.filter(e=>e.kind==="void").forEach(removeEnemy);
+        runtime.stations.filter(s=>(s.kind==="voiddoor"||s.kind==="voidoffering")).forEach(s=>runtime.roomGroup.remove(s.object));runtime.stations=runtime.stations.filter(s=>s.kind!=="voiddoor"&&s.kind!=="voidoffering");notify("VOID SATISFIED · ALL LOCKS RELEASED");}
+      else notify(`VOID ACCEPTED ${paid} · ${debt.paid}/50`);
+      updateHud(true);saveRun(false);if(party.role==="host"&&party.connection?.open)party.send({type:"room",state:snapshot()});
+    }
+    function rememberNumber(){const trial=runtime.encounters.memory;if(trial?.phase!=="reveal")return;trial.phase="waiting";resume();saveRun(false);}
+    function answerMemory(answer:string){
+      const trial=runtime.encounters.memory;if(trial?.phase!=="quiz"||!trial.choices.includes(answer))return;
+      const correct=answer===trial.number;runtime.encounters.memory=null;resume();
+      if(!correct){const options=BOONS.filter(b=>b.negative&&!runtime.boons.includes(b.id));if(options.length)applyBoon(options[Math.min(options.length-1,Math.floor(Math.random()*options.length))].id);notify("X::::RamYraM::::X · INCORRECT · A NEGATIVE BOON IS YOURS");}
+      else notify("X::::RamYraM::::X · CORRECT · YOUR MIND IS INTACT");
+      updateHud(true);saveRun(false);
+    }
+    function buildEntityEvents(restore?:SaveData){
+      const events=runtime.encounters;
+      const eligible=party.role!=="guest"&&!runtime.paradoxWorld&&!runtime.ascendedWorld&&!runtime.resonatorWorld&&!runtime.chaseRoom&&!runtime.haidIniActive&&!runtime.persHubActive&&runtime.room>=5&&runtime.room<170;
+      if(!restore&&eligible&&!events.voidSeen&&!events.voidDebt&&!events.memory&&Math.random()<.025){events.voidSeen=true;events.voidDebt={paid:0,doorsLeft:20,lastRoom:runtime.room};notify("VOID · 50 CRYSTALS · TWENTY DOORS TO PAY");}
+      if(events.voidDebt){
+        if(events.voidDebt.doorsLeft<=0){runtime.spawnGrace=0;runtime.wardCharges=0;runtime.basdinos=0;kill("VOID · TWENTY DOORS · DEBT UNPAID","void");return;}
+        // Five usable passages replace the sealed ordinary exit.
+        addEnemy("void",()=>.5);runtime.enemies[runtime.enemies.length-1].object.position.set(0,0,-runtime.roomLength/2+5);
+        runtime.stations.push({kind:"voidoffering",object:runtime.enemies[runtime.enemies.length-1].object,activated:false});
+        for(let i=0;i<5;i++){const gate=new THREE.Group();gate.position.set((i-2)*2.1,0,-runtime.roomLength/2+3);
+          const frame=new THREE.Mesh(new THREE.TorusGeometry(.68,.09,12,32),new THREE.MeshBasicMaterial({color:0x8050ff}));frame.position.y=1.3;frame.scale.y=1.5;gate.add(frame);runtime.roomGroup.add(gate);runtime.stations.push({kind:"voiddoor",object:gate,activated:false});}
+      }
+      if(!restore&&eligible&&!events.memorySeen&&!events.voidDebt&&Math.random()<.08){events.memorySeen=true;events.memory=createMemoryTrial(runtime.room);}
+      const trial=events.memory;
+      if(trial?.phase==="waiting"&&isPrimeDoor(runtime.room)&&runtime.room>=trial.quizRoom){trial.phase="quiz";}
+      if(party.role!=="guest"&&trial&&(trial.phase==="reveal"||trial.phase==="quiz")){
+        addEnemy("ramyram",()=>.5);runtime.enemies[runtime.enemies.length-1].object.position.copy(runtime.player).add(new THREE.Vector3(0,-1.65,-3));
+        runtime.running=false;runtime.keysDown.clear();updateHud(true);showScreen("memory");if(document.pointerLockElement)document.exitPointerLock();
+      }
+      if(runtime.boons.includes("fogbank")&&scene.fog instanceof THREE.FogExp2)scene.fog.density*=1.7;
+      updateHud(true);
+    }
     function snapshot(): SaveData {
       return { chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
         discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion, lightInfusion: runtime.lightInfusion,
-        boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,boonieMet:runtime.boonieMet,accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
+        encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,boonieMet:runtime.boonieMet,accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
         wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil },
         openedCabinets:runtime.stations.flatMap((s,i)=>s.kind==="cabinet"&&s.activated?[i]:[]),
         removedPickups:[...runtime.removedPickups], activatedResonators:runtime.stations.flatMap((s,i)=>s.kind==="resonator"&&s.activated?[i]:[]),
@@ -1843,7 +1901,7 @@ export default function IonGame() {
     }
     function applySave(save: SaveData) {
       runtime.chaseState = save.chaseState ?? null;
-      runtime.boons=[...(save.boons??[])];runtime.resonatorWorld=save.resonatorWorld??false;runtime.boonieMet=save.boonieMet??false;
+      runtime.encounters=JSON.parse(JSON.stringify(save.encounters??emptyEntityEvents()));runtime.boons=[...(save.boons??[])];runtime.resonatorWorld=save.resonatorWorld??false;runtime.boonieMet=save.boonieMet??false;
       runtime.ammo = save.ammo; runtime.battery = save.battery; runtime.crystals = { ...save.crystals };
       runtime.discovered = new Set(save.discovered); runtime.gunInfusion = save.gunInfusion; runtime.lightInfusion = save.lightInfusion;
       runtime.accessKeys = save.accessKeys;
@@ -1865,7 +1923,7 @@ export default function IonGame() {
       runtime.ammo = 6; runtime.maxAmmo = 8; runtime.battery = 100; runtime.crystals = EMPTY_COUNTS(); runtime.discovered.clear();
       runtime.gunInfusion = null; runtime.lightInfusion = null; runtime.accessKeys = 0;
       runtime.grinRoom = -1; runtime.grinTargetRoom = -1; runtime.grinTeleportTimer = 0; runtime.grinWarningTimer = 0; runtime.grinIncoming = false; runtime.hiding = false;
-      runtime.boons=[];runtime.resonatorWorld=false;runtime.boonieMet=false;
+      runtime.encounters=emptyEntityEvents();runtime.boons=[];runtime.resonatorWorld=false;runtime.boonieMet=false;
       runtime.inventory = EMPTY_INVENTORY(); runtime.basdinos = 0; runtime.wardCharges = 0; runtime.speedBoostRooms = 0; runtime.banishedUntil = {};
       runtime.paradoxWorld=false;runtime.paradoxJar=false;runtime.paradoxJarEquipped=false;runtime.paradoxEssence=false;
       runtime.paradoxRift=false;runtime.paradoxBlobRoom=false;runtime.paradoxGrinEncountered=false;
@@ -1886,7 +1944,7 @@ export default function IonGame() {
       try{
         if(!assetsReady){setPartyStatus("WAIT FOR THE FACILITY TO LOAD");return;}
         const inGame=runtime.running||screenRef.current==="pause"||screenRef.current==="inventory";
-        if(!inGame){start(true);runtime.running=false;}
+        if(!inGame){pendingHost=true;start(true);return;}
         showScreen("party");const code=await party.host();setPartyInput(code);if(hasTripleDigit(code))badge("multiplayer","triple-code");updateHud(true);
       }catch(error){setPartyStatus(error instanceof Error?error.message:"Could not host room");party.close();}
     }
@@ -1913,13 +1971,22 @@ export default function IonGame() {
       notify(`BADGE GRANTED · ${entry.title}`);updateHud(true);
     }
     function toggleBoon(id:BoonId){
+      if(!BOONS.some(b=>b.id===id))return;
+      if(pendingRun==="resume"&&runtime.boons.includes(id)){notify("SAVED BOONS STAY ACTIVE FOR THIS RUN");return;}
       chosenBoons.current=chosenBoons.current.includes(id)?chosenBoons.current.filter(b=>b!==id):[...chosenBoons.current,id];
       setSelectedBoons([...chosenBoons.current]);
     }
     function applyBoon(id:BoonId){
-      if(!runtime.boons.includes(id))runtime.boons.push(id);
+      if(runtime.boons.includes(id))return;
+      runtime.boons.push(id);
+      if(id==="pockets"){runtime.maxAmmo+=8;runtime.ammo=Math.min(runtime.maxAmmo,runtime.ammo+8);}
+      if(id==="reserve")CRYSTAL_KEYS.forEach(k=>runtime.crystals[k]+=3);
+      if(id==="wardborn")runtime.wardCharges+=3;
+      if(id==="locksmith")runtime.accessKeys+=3;
+      if(id==="lifeline")runtime.basdinos++;
+      if(id==="emptyhands")runtime.ammo=0;
       if(id==="infused"){CRYSTAL_KEYS.forEach(k=>runtime.discovered.add(k));runtime.gunInfusion="corrupted";runtime.lightInfusion="fluorite";runtime.mandatoryCollected=true;refreshObjective();}
-      if(id==="doom"){runtime.spawnGrace=0;runtime.wardCharges=0;runtime.basdinos=0;kill("LAST BREATH · BOONIE CLAIMED YOUR SOUL","boonie");}
+      if(id==="doom"){runtime.spawnGrace=0;runtime.boons.push("fragile");runtime.wardCharges=0;runtime.basdinos=0;kill("LAST BREATH · BOONIE CLAIMED YOUR SOUL","boonie");}
       notify(`BOON · ${BOONS.find(b=>b.id===id)?.name}`);updateHud(true);
     }
     function completeArchive(){
@@ -1933,10 +2000,12 @@ export default function IonGame() {
     function leaveParty(){party.close();runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;setPartyStatus("LEFT THE MULTIPLAYER ROOM");updateHud(true);}
     function openBadges(){badgeReturnRef.current=screenRef.current;runtime.running=false;showScreen("badges");if(document.pointerLockElement)document.exitPointerLock();}
     function closeBadges(){if(badgeReturnRef.current===null)resume();else showScreen(badgeReturnRef.current);}
+    let pendingRun: "fresh"|"resume"|null=null;
+    let pendingHost=false;
     function startNewSlot(slot:number){
       if(slot<0||slot>2)return;activeSlotRef.current=slot;
       partyRef.current?.close();setPartyStatus("PLAY SOLO OR CONNECT TO A FRIEND");
-      setTutorialStep(0);showScreen("tutorial");
+      setTutorialStep(0);start(true);
     }
     function loadSlot(slot:number){
       const save=readRunSlots<SaveData>(localStorage)[slot]?.state;
@@ -1945,11 +2014,25 @@ export default function IonGame() {
       runtime.dead=false;runtime.won=false;applySave(save);start(false);
     }
     function start(fresh = false) {
+      if(!assetsReady)return;
+      pendingRun=fresh?"fresh":"resume";
+      if(!fresh){chosenBoons.current=[...runtime.boons];setSelectedBoons([...runtime.boons]);}
+      runtime.running=false;runtime.keysDown.clear();showScreen("boons");if(document.pointerLockElement)document.exitPointerLock();
+    }
+    function confirmBoons(){
+      if(!pendingRun){showScreen("saves");return;}
+      const fresh=pendingRun==="fresh";pendingRun=null;
+      const added=fresh?[]:chosenBoons.current.filter(id=>!runtime.boons.includes(id));
+      launchRun(fresh);added.forEach(applyBoon);updateHud(true);if(activeSlotRef.current!==null)saveRun(false);
+      if(pendingHost){pendingHost=false;void hostParty();}
+    }
+    function launchRun(fresh = false) {
       if (!assetsReady) return;
       if (fresh) resetRun(); if (!runtime.audio) runtime.audio = new AudioEngine(); runtime.audio.resume();
       runtime.running = true; runtime.dead = false; showScreen(null);
-      if(fresh){chosenBoons.current.forEach(applyBoon);if(runtime.boons.includes("sugar")&&!runtime.dead)buildRoom(1);}
-      if(fresh && activeSlotRef.current!==null)saveRun(false);
+      if(fresh){chosenBoons.current.forEach(applyBoon);if(!runtime.dead)buildRoom(1);}
+      if(runtime.encounters.memory?.phase==="reveal"||runtime.encounters.memory?.phase==="quiz"){runtime.running=false;showScreen("memory");}
+      if(activeSlotRef.current!==null)saveRun(false);
       if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock(); updateHud(true);
     }
     function resume() {
@@ -1958,12 +2041,12 @@ export default function IonGame() {
     }
     function kill(reason: string, kind: EnemyKind = "entity") {
       if (runtime.dead || runtime.spawnGrace > 0 && kind !== "noise") return;
-      if (runtime.wardCharges > 0 && kind !== "noise" && !runtime.boons.includes("fragile")) {
+      if (runtime.wardCharges > 0 && kind !== "noise" && !runtime.boons.includes("fragile")&&!runtime.boons.includes("glassbody")) {
         runtime.wardCharges -= 1; runtime.spawnGrace = 4;
         runtime.enemies.forEach((enemy) => { if (enemy.alive) enemy.object.position.add(enemy.object.position.clone().sub(runtime.player).setY(0).normalize().multiplyScalar(6)); });
         runtime.audio?.pulse("teleport"); notify("CRYSTAL WARD SHATTERED · CONTACT NEGATED"); updateHud(true); return;
       }
-      if (runtime.basdinos > 0 && kind !== "noise" && !runtime.boons.includes("fragile")) {
+      if (runtime.basdinos > 0 && kind !== "noise" && !runtime.boons.includes("fragile")&&!runtime.boons.includes("glassbody")) {
         runtime.basdinos -= 1; const model = runtime.basdinoModels.pop(); if (model) { runtime.roomGroup.remove(model); disposeModel(model); } runtime.spawnGrace = 4;
         runtime.enemies.forEach((enemy) => { if (enemy.alive) enemy.object.position.add(enemy.object.position.clone().sub(runtime.player).setY(0).normalize().multiplyScalar(7)); });
         runtime.audio?.pulse("teleport"); notify("BASDINO SACRIFICED ITSELF · BONUS LIFE USED"); updateHud(true); return;
@@ -1976,11 +2059,12 @@ export default function IonGame() {
     }
     function removeEnemy(enemy: Enemy) { enemy.alive = false; runtime.roomGroup.remove(enemy.object); disposeModel(enemy.object); }
     function fire() {
+      if(voidBlocked())return;
       if (runtime.infectionTime >= 0) return;
       if (!runtime.running || runtime.cameraMode || screenRef.current) return;
       if (runtime.hiding) { runtime.audio?.pulse("error"); notify("TRAPDOOR SEALED · FIRING BLOCKED"); return; }
       if (runtime.ammo <= 0) { runtime.audio?.pulse("error"); notify("CHAMBER EMPTY · CRAFT AMMUNITION"); return; }
-      runtime.ammo = Math.max(0,runtime.ammo-(runtime.boons.includes("famine")?2:1)); runtime.gunKick = 1; runtime.audio?.pulse("shot");
+      runtime.ammo = Math.max(0,runtime.ammo-(runtime.boons.includes("famine")||runtime.boons.includes("hungry")?2:1)); runtime.gunKick = 1; runtime.audio?.pulse("shot");
       const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(), camera);
       const targets = runtime.enemies.filter((enemy) => enemy.alive).flatMap((enemy) => {
         const meshes: THREE.Object3D[] = []; enemy.object.traverse((child) => { if (child instanceof THREE.Mesh) meshes.push(child); }); return meshes;
@@ -2020,13 +2104,14 @@ export default function IonGame() {
       updateHud(true);
     }
     function toggleLight() {
+      if(voidBlocked())return;
       if (runtime.battery <= 0 && !runtime.flashlightOn) { notify("BATTERY DEPLETED"); runtime.audio?.pulse("error"); return; }
       runtime.flashlightOn = !runtime.flashlightOn; runtime.flashlight.visible = runtime.flashlightOn; runtime.luxuryLight.visible = runtime.flashlightOn; updateHud(true);
     }
     function jump() {
       if (runtime.infectionTime >= 0) return;
       if (!runtime.running || runtime.cameraMode || runtime.hiding || !runtime.grounded) return;
-      runtime.verticalVelocity = runtime.boons.includes("heavy")?5.6:6.7; runtime.grounded = false; runtime.audio?.pulse("step");
+      runtime.verticalVelocity = (runtime.boons.includes("heavy")?5.6:6.7)*(runtime.boons.includes("spring")?1.25:1)*(runtime.boons.includes("leadboots")?.75:1); runtime.grounded = false; runtime.audio?.pulse("step");
     }
     function collect(index: number, fromPeer=false) {
       const pickup = runtime.pickups[index]; if (!pickup || !pickup.object.parent) return;
@@ -2063,7 +2148,7 @@ export default function IonGame() {
         badge("secret","win");notify("*+* BADGE CLAIMED · WIN");updateHud(true);return;
       } else if (pickup.kind === "crystal" && pickup.crystal) {
         badge("crystal",pickup.crystal);
-        runtime.crystals[pickup.crystal] += 1; const first = !runtime.discovered.has(pickup.crystal); runtime.discovered.add(pickup.crystal);
+        runtime.crystals[pickup.crystal] += runtime.boons.includes("geology")?2:1; const first = !runtime.discovered.has(pickup.crystal); runtime.discovered.add(pickup.crystal);
         if (pickup.mandatory || pickup.crystal === runtime.mandatoryCrystal) runtime.mandatoryCollected = true;
         notify(first ? `${CRYSTALS[pickup.crystal].label.toUpperCase()} DISCOVERED · INFUSION UNLOCKED` : `${CRYSTALS[pickup.crystal].label.toUpperCase()} +1`);
       } else if (pickup.kind === "ammo") { runtime.ammo = Math.min(runtime.maxAmmo, runtime.ammo + 3); notify("3 ROUNDS RECOVERED"); }
@@ -2118,11 +2203,19 @@ export default function IonGame() {
       },2600);
     }
     function advanceDimension(){
+      if(runtime.encounters.voidDebt){buildRoom(Math.min(199,runtime.room+1));return;}
       if(runtime.ascendedWorld&&runtime.ascendedDoor>=20){finishAscended();return;}
       if(runtime.resonatorWorld){badge("secret","resonator-victory");runtime.resonatorWorld=false;escapeToHome();return;}
       buildRoom(Math.min(200,runtime.room+boonDoorStep(runtime.boons,runtime.chaseRoom)));
     }
     function openStation(kind: Station["kind"], station?: Station) {
+      if(kind==="voidoffering"){offerVoid();return;}
+      if(kind==="voiddoor"){
+        if(!runtime.encounters.voidDebt)return;
+        if(runtime.encounters.voidDebt.doorsLeft<=0){runtime.spawnGrace=0;kill("VOID · DEBT UNPAID","void");return;}
+        runtime.transition=.8;notify("VOID · CHOOSE YOUR PASSAGE");return;
+      }
+      if(voidBlocked())return;
       if(kind==="rainbow"){
         if(party.role==="guest"){notify("THE HOST MUST ACTIVATE THE RAINBOW RESONATOR");return;}
         runtime.resonatorWorld=true;runtime.paradoxWorld=false;runtime.ascendedWorld=false;runtime.chaseState=null;buildRoom(300);notify("OPTIONAL TRIAL · ALL ENTITIES · REACH THE EXIT");return;
@@ -2200,13 +2293,14 @@ export default function IonGame() {
       if (nearest.kind === "station" && nearest.index !== undefined) { const station = runtime.stations[nearest.index]; if (station){if(station.kind==="resonator"&&!station.activated)partyRef.current?.send({type:"action",room:runtime.room,action:"resonator",id:nearest.index});openStation(station.kind, station);} }
       if(nearest.kind==="teammate" && runtime.remotePose?.dead){partyRef.current?.send({type:"action",room:runtime.room,action:"revive"});runtime.remotePose.dead=false;badge("revive");notify("TEAMMATE REVIVED");}
       if (nearest.kind === "door") {
+        if(runtime.encounters.voidDebt){notify("VOID SEALED THIS EXIT · USE ONE OF THE FIVE VOID DOORS");return;}
         if(runtime.room===200){
           if(!runtime.paradoxWorld){escapeToHome();return;}
           notify("THE RETURN RIFT IS YOUR ONLY EXIT");return;
         }
         if (runtime.noiseActive || runtime.chaseRoom && !runtime.doorUnlocked) {notify("RESONANCE LOCK · COMPLETE SPECIMENS AND RESONATORS");return;}
         if (runtime.haidIniActive && runtime.activeResonators < 30) { runtime.audio?.pulse("error"); notify("HAID-INI LOCKDOWN · CRYSTAL KEYS REJECTED"); return; }
-        if (!runtime.doorUnlocked && runtime.accessKeys > 0) { runtime.accessKeys -= 1; runtime.doorUnlocked = true; updateDoorIndicator(); notify("CRYSTAL KEY ACCEPTED"); }
+        if (!runtime.doorUnlocked && runtime.accessKeys > 0&&!runtime.boons.includes("nokeys")) { runtime.accessKeys -= 1; runtime.doorUnlocked = true; updateDoorIndicator(); notify("CRYSTAL KEY ACCEPTED"); }
         if (runtime.doorUnlocked) { runtime.doorOpening = true;
           if(runtime.ascendedWorld&&runtime.ascendedDoor===20){runtime.ascendedCleared=true;runtime.objective="ASCENDED CLEARED · SHOOT PERS BEFORE CROSSING FOR THE SECRET TRIAL";}
           else runtime.objective = "Proceed to the next room";
@@ -2217,6 +2311,7 @@ export default function IonGame() {
     function hasCost(cost: Partial<Record<CrystalKey, number>>) { return Object.entries(cost).every(([key, value]) => runtime.crystals[key as CrystalKey] >= (value ?? 0)); }
     function spend(cost: Partial<Record<CrystalKey, number>>) { Object.entries(cost).forEach(([key, value]) => { runtime.crystals[key as CrystalKey] -= value ?? 0; }); }
     function craft(id: string) {
+      if(voidBlocked())return;
       const recipes: Record<string, { cost: Partial<Record<CrystalKey, number>>; make: () => void; label: string }> = {
         ammo: { cost: { malachite: 1 }, make: () => { runtime.ammo = Math.min(runtime.maxAmmo, runtime.ammo + 4); }, label: "4 TOXIC ROUNDS" },
         battery: { cost: { quartz: 1 }, make: () => { runtime.battery = Math.min(100, runtime.battery + 55); }, label: "BATTERY CELL" },
@@ -2227,6 +2322,7 @@ export default function IonGame() {
       spend(recipe.cost); recipe.make();badge("craft"); runtime.audio?.pulse("pickup"); notify(`${recipe.label} CRAFTED`); updateHud(true);
     }
     function infuse(key: CrystalKey) {
+      if(voidBlocked())return;
       if (!runtime.discovered.has(key)) { notify("INFUSION SCHEMA NOT DISCOVERED"); return; }
       const target = CRYSTALS[key].target; if (target === "GUN" || target === "BOTH") runtime.gunInfusion = key;
       if (target === "LIGHT" || target === "SUIT" || target === "BOTH") runtime.lightInfusion = key;
@@ -2235,12 +2331,14 @@ export default function IonGame() {
       notify(`${CRYSTALS[key].label.toUpperCase()} ${target} INFUSION ACTIVE`); runtime.audio?.pulse("pickup"); updateHud(true);
     }
     function synthesizeFluorite() {
+      if(voidBlocked())return;
       const cost = { malachite: 1, amethyst: 1, quartz: 1, corrupted: 1 } satisfies Partial<Record<CrystalKey, number>>;
       if (!hasCost(cost)) { runtime.audio?.pulse("error"); notify("NEED 1 MAL · 1 AME · 1 QTZ · 1 ERR"); return; }
       spend(cost); runtime.crystals.fluorite += 2; runtime.discovered.add("fluorite");badge("synthesize"); runtime.audio?.pulse("pickup");
       notify("FLUORITE SYNTHESIZED · MAIN CURRENCY +2"); updateHud(true);
     }
     function buyPersItem() {
+      if(voidBlocked())return;
       if (runtime.crystals.fluorite < 1) { runtime.audio?.pulse("error"); notify("PERS REQUIRES 1 FLUORITE"); return; }
       runtime.crystals.fluorite -= 1;
       const pool: ItemKey[] = ["soul", "royalBattery", "obsidianMagazine", "citrineRush", "persKey", "crystalWard"];
@@ -2249,6 +2347,7 @@ export default function IonGame() {
       runtime.audio?.pulse("pickup"); notify(`PERS GRANTED · ${ITEMS[item].label.toUpperCase()}`); updateHud(true);
     }
     function buyBasdino() {
+      if(voidBlocked())return;
       if (runtime.crystals.fluorite < 10) { runtime.audio?.pulse("error"); notify("BASDINO BOND COSTS 10 FLUORITE"); return; }
       runtime.crystals.fluorite -= 10; runtime.basdinos += 1; addBasdinoCompanions();
       badge("basdino");
@@ -2266,6 +2365,7 @@ export default function IonGame() {
       notify("EXTRACTION CHAMBER · THE FINAL JAR IS NEAR THE DOOR");updateHud(true);
     }
     function useItem(key: ItemKey) {
+      if(voidBlocked())return;
       if (runtime.inventory[key] <= 0) return;
       if (key === "soul") { showScreen("banish"); return; }
       if(key==="resonationShield"){notify("SHIELD READY · REUSABLE AT SHIELDED RESONATORS");return;}
@@ -2330,7 +2430,7 @@ export default function IonGame() {
     actionRef.current = { start, resume, interact, fire, toggleLight, jump, close, craft, infuse, synthesizeFluorite,
       buyPersItem, buyBasdino, openInventory, useItem, banish, restartCheckpoint,
       toggleJar,exploreExtraction,
-      startNewSlot,loadSlot,saveRun:()=>saveRun(true),hostParty,joinParty,redeemBadgeCode,grantBadge,toggleBoon,completeArchive,leaveParty,openBadges,closeBadges,
+      confirmBoons,rememberNumber,answerMemory,offerVoid,startNewSlot,loadSlot,saveRun:()=>saveRun(true),hostParty,joinParty,redeemBadgeCode,grantBadge,toggleBoon,completeArchive,leaveParty,openBadges,closeBadges,
       touchMoveStart, touchMoveUpdate, touchMoveEnd, touchLookStart, touchLookUpdate, touchLookEnd,
       setSprint: (value) => { runtime.touchMove.sprint = value; } };
 
@@ -2344,7 +2444,7 @@ export default function IonGame() {
       runtime.stations.forEach((station, index) => {
         const distance = station.object.position.distanceTo(runtime.player);
         if (distance < bestDistance && !(station.activated && (station.kind === "resonator" || station.kind === "cabinet"))) { bestDistance = distance; runtime.nearest = { kind: "station", index };
-          runtime.prompt = station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
+          runtime.prompt = station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
             : station.kind === "trapdoor" ? runtime.chaseRoom ? "TRAPDOOR JAMMED · KEEP RUNNING" : runtime.haidIniActive ? runtime.hiding ? "E  EXIT · HAID-INI CAN ENTER" : "E  HIDE · UNSAFE FROM HAID-INI" : runtime.hiding ? "E  EXIT TRAPDOOR" : "E  HIDE IN TRAPDOOR"
             : station.kind === "resonator" ? station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  TUNE · RESONATION SHIELD REQUIRED" : "E  TUNE RESONATOR"
             : `E  USE ${station.kind.replace("infusionsmith", "INFUSIONSMITH").toUpperCase()}`; }
@@ -2364,7 +2464,7 @@ export default function IonGame() {
       const activeInfusions = new Set([runtime.gunInfusion, runtime.lightInfusion].filter(Boolean));
       const infusionBoost = 1 + activeInfusions.size * 0.08 + (activeInfusions.has("citrine") ? 0.17 : 0);
       const itemBoost = runtime.speedBoostRooms > 0 ? 1.35 : 1;
-      return runtime.boons.includes("bloodline")?0.78+runtime.tier*.03:5.1 * infusionBoost * itemBoost*(runtime.boons.includes("swift")?1.3:1);
+      return runtime.boons.includes("bloodline")?0.78+runtime.tier*.03:5.1 * infusionBoost * itemBoost*(runtime.boons.includes("swift")?1.3:1)*(runtime.boons.includes("molasses")?.8:1);
     }
     function updateMovement(dt: number) {
       if (runtime.hiding) {
@@ -2384,7 +2484,7 @@ export default function IonGame() {
       const right = new THREE.Vector3(Math.cos(runtime.yaw), 0, -Math.sin(runtime.yaw));
       const move = forward.multiplyScalar(forwardInput).add(right.multiplyScalar(sideInput)); if (move.lengthSq() > 1) move.normalize();
       const next = runtime.player.clone().addScaledVector(move, speed * dt); const radius = 0.34;
-      runtime.verticalVelocity -= (runtime.boons.includes("heavy")?21:16.5) * dt; next.y += runtime.verticalVelocity * dt;
+      runtime.verticalVelocity -= (runtime.boons.includes("heavy")?21:16.5)*(runtime.boons.includes("feather")?.75:1)*(runtime.boons.includes("gravitywell")?1.4:1) * dt; next.y += runtime.verticalVelocity * dt;
       if(runtime.resonatorWorld){
         let supported=false;
         for(const platform of runtime.platforms){const top=platform.max.y+1.65;if(runtime.verticalVelocity<=0&&runtime.player.y>=top-.08&&next.y<=top&&next.x>=platform.min.x-.25&&next.x<=platform.max.x+.25&&next.z>=platform.min.z-.25&&next.z<=platform.max.z+.25){next.y=top;runtime.verticalVelocity=0;runtime.grounded=true;supported=true;break;}}
@@ -2408,12 +2508,12 @@ export default function IonGame() {
       if(runtime.boons.includes("blackout")){runtime.flashlightOn=false;runtime.flashlight.visible=false;}
       if (runtime.flashlightOn && !runtime.boons.includes("everlight")) {
         const drainScale = runtime.lightInfusion === "quartz" ? 0.43 : runtime.lightInfusion === "corrupted" ? 2.25 : 1;
-        runtime.battery = Math.max(0, runtime.battery - dt * 0.42 * drainScale*(runtime.boons.includes("famine")?2:1));
+        runtime.battery = Math.max(0, runtime.battery - dt * 0.42 * drainScale*(runtime.boons.includes("famine")?2:1)*(runtime.boons.includes("leaking")?2:1));
         if (runtime.battery <= 0) { runtime.flashlightOn = false; runtime.flashlight.visible = false; notify("FLASHLIGHT BATTERY DEPLETED"); }
       }
       const lightStrength = runtime.lightInfusion === "quartz" ? 148 : runtime.lightInfusion === "citrine" ? 118 : runtime.lightInfusion === "corrupted" ? 178 : 92;
-      runtime.flashlight.intensity = lightStrength * (0.72 + runtime.battery / 360);
-      runtime.flashlight.distance = runtime.lightInfusion === "quartz" ? 42 : 31;
+      runtime.flashlight.intensity = lightStrength * (0.72 + runtime.battery / 360)*(runtime.boons.includes("bright")?1.5:1)*(runtime.boons.includes("candle")?.5:1);
+      runtime.flashlight.distance = (runtime.lightInfusion === "quartz" ? 42 : 31)*(runtime.boons.includes("longbeam")?1.5:1)*(runtime.boons.includes("shortsight")?.55:1);
       runtime.flashlight.angle = runtime.lightInfusion === "quartz" ? 0.56 : 0.44; runtime.flashlight.penumbra = 0.64;
       runtime.luxuryLight.intensity = 0;
       renderer.toneMappingExposure = runtime.ascendedWorld ? 1.04 : runtime.paradoxWorld ? 0.62 : runtime.chaseRoom ? 1.22 : Math.max(0.52, 0.76 - runtime.tier * 0.028);
@@ -2433,7 +2533,7 @@ export default function IonGame() {
           notify("GRIN DEPARTED · YOU CAN LEAVE THE TRAPDOOR"); updateHud(true);
           return;
         }
-        if(enemy.kind==="boonie"){animateMonster(enemy.object,performance.now()*.001);return;}
+        if(enemy.kind==="boonie"||enemy.kind==="void"||enemy.kind==="ramyram"){animateMonster(enemy.object,performance.now()*.001);return;}
         const toPlayer = runtime.player.clone().sub(enemy.object.position);toPlayer.y=0;
         const localDistance=toPlayer.length();
         if(party.role==="host" && runtime.remotePose?.room===runtime.room && !runtime.remotePose.dead){
@@ -2452,7 +2552,7 @@ export default function IonGame() {
         if (enemy.kind === "watcher") { const directionToEnemy = enemy.object.position.clone().sub(camera.position).normalize(); const lit = runtime.flashlightOn && forward.dot(directionToEnemy) > 0.89;
           shouldMove = !lit; enemy.speed = lit ? 0 : 3.3 + runtime.tier * 0.2; }
         let movementTarget = toPlayer;
-        let movementSpeed = enemy.speed*(runtime.boons.includes("echo")?1.2:1);
+        let movementSpeed = enemy.speed*(runtime.boons.includes("echo")?1.2:1)*(runtime.boons.includes("slowhunters")?.85:1)*(runtime.boons.includes("frenzy")?1.25:1);
         if ((enemy.kind === "blob" || enemy.kind === "remetons") && runtime.chaseState
           && runtime.room - runtime.chaseState.start + 1 === 5) movementSpeed = currentSprintSpeed();
         if (enemy.kind === "entity") {
@@ -2587,7 +2687,7 @@ export default function IonGame() {
         light.intensity = failure ? 0.35 : 12 + Math.sin(performance.now() * 0.003 + index) * 3; });
       if (runtime.doorOpening) {
         if (!runtime.doorCreaked) { runtime.doorCreaked = true; runtime.audio?.creak(); if (runtime.doorPers && !runtime.paradoxWorld && !runtime.paradoxRift) runtime.doorPers.visible = true; }
-        runtime.doorProgress = Math.min(1, runtime.doorProgress + dt * 0.2);
+        runtime.doorProgress = Math.min(1, runtime.doorProgress + dt * 0.2*(runtime.boons.includes("quickgate")?1.8:1)*(runtime.boons.includes("rustgate")?.6:1));
         const easedLift = THREE.MathUtils.smootherstep(runtime.doorProgress, 0, 1);
         const lift = easedLift * (runtime.roomHeight + 2.8);
         runtime.doorPanels.forEach((panel, index) => {
@@ -2643,7 +2743,10 @@ export default function IonGame() {
       renderer.render(scene, camera); animationFrame = requestAnimationFrame(animate);
     }
     function onResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6)); renderer.setSize(window.innerWidth, window.innerHeight); }
-    function onKeyDown(event: KeyboardEvent) { runtime.keysDown.add(event.code); if (event.repeat) return; if (event.code === "KeyE") interact(); if (event.code === "KeyF") toggleLight(); if (event.code === "Space") { event.preventDefault(); jump(); } }
+    function onKeyDown(event: KeyboardEvent) {
+      const target=event.target as HTMLElement|null;if(target?.tagName==="INPUT"||target?.tagName==="TEXTAREA"||target?.isContentEditable)return;
+      if(event.code==="KeyI"){if(event.repeat)return;event.preventDefault();if(screenRef.current==="inventory")close();else if(runtime.running&&!runtime.dead)openInventory();return;}
+      runtime.keysDown.add(event.code); if (event.repeat) return; if (event.code === "KeyE") interact(); if (event.code === "KeyF") toggleLight(); if (event.code === "Space") { event.preventDefault(); jump(); } }
     function onKeyUp(event: KeyboardEvent) { runtime.keysDown.delete(event.code); }
     function onMouseMove(event: MouseEvent) { if (document.pointerLockElement !== canvas || !runtime.running || runtime.cameraMode) return; runtime.yaw -= event.movementX * 0.0021; runtime.pitch -= event.movementY * 0.0019; runtime.pitch = THREE.MathUtils.clamp(runtime.pitch, -1.25, 1.25); }
     function onMouseDown(event: MouseEvent) { if (event.button === 0 && document.pointerLockElement === canvas) fire(); }
@@ -2701,10 +2804,11 @@ export default function IonGame() {
           <div className={`grin-meter ${grinBars >= 6 ? "critical" : grinBars >= 3 ? "warning" : ""}`}>
             <div><span>GRIN PROXIMITY</span><strong>{grinStatus}</strong></div>
             <div className="grin-bars" aria-label={`${grinBars} of 8 proximity bars`}>{Array.from({ length: 8 }, (_, index) => <i className={index < grinBars ? "active" : ""} key={index} />)}</div>
-            <small>{hud.grinWarning ? "FIND A TRAPDOOR NOW" : hud.grinRoom === hud.room && hud.entityDistance < 90 ? `LEAVES IN ${Math.ceil(hud.grinTeleportIn)}S` : hud.paradoxWorld ? "GRIN EVERY 25TH DOOR · BLOB 7%" : "7% SPAWN ROLL EACH ROOM"}</small>
+            <small>{hud.grinWarning ? "FIND A TRAPDOOR NOW" : hud.grinRoom === hud.room && hud.entityDistance < 90 ? `LEAVES IN ${Math.ceil(hud.grinTeleportIn)}S` : hud.paradoxWorld ? "GRIN EVERY 25TH DOOR · BLOB 3%" : "7% SPAWN ROLL EACH ROOM"}</small>
           </div>
         </section>
-        <button className="inventory-toggle" onClick={() => actionRef.current?.openInventory()}>INVENTORY <b>{inventoryCount}</b></button>
+        {hud.encounters.voidDebt&&<aside className="void-debt"><strong>VOID · {hud.encounters.voidDebt.paid}/50 CRYSTALS · {hud.encounters.voidDebt.doorsLeft} DOORS LEFT</strong><p>Equipment and stations are sealed. Gather crystals and choose one of five Void passages.</p><button onClick={()=>actionRef.current?.offerVoid()}>OFFER CARRIED CRYSTALS</button></aside>}
+        <button className="inventory-toggle" onClick={() => actionRef.current?.openInventory()}>INVENTORY [I] <b>{inventoryCount}</b></button>
         <button className="badge-toggle" onClick={() => actionRef.current?.openBadges()}>BADGES <b>{hud.badgeCount}/{BADGES.length}</b></button>
       {hud.partyConnected&&<div className="party-indicator">{hud.playerName} + {hud.teammateName||"CONNECTING"} · {hud.partyCode}</div>}
       {(hud.ascendedWorld||hud.paradoxWorld||hud.riftOpen)&&<div className={`paradox-indicator ${hud.ascendedWorld?"ascended-indicator":""}`}>{hud.ascendedWorld?`ASCENDED · ${String(hud.ascendedDoor).padStart(2,"0")} / 20`:hud.paradoxWorld?`PARADOX · *${String(hud.room).padStart(3,"0")} / *200`:"PERS TEAR OPEN · ENTER TO FALL"}</div>}
@@ -2748,7 +2852,8 @@ export default function IonGame() {
       {screen === "saves" && <MenuShell title="SAVED RUNS" subtitle="Three independent local slots · rooms save automatically when entered" onClose={() => showScreen("start")}><div className="save-grid">
         {savedRuns.map((slot,index)=><article className="save-card" key={index}><small>SLOT {index+1}</small><strong>{slot?`ROOM ${String(slot.state.room).padStart(3,"0")}`:"EMPTY SLOT"}</strong><p>{slot?`Saved ${new Date(slot.savedAt).toLocaleString()} · ${slot.state.discovered?.length??0}/7 minerals`:"Start a new descent and save automatically."}</p>{slot&&<button onClick={()=>actionRef.current?.loadSlot(index)}>CONTINUE RUN</button>}<button className="secondary" onClick={()=>actionRef.current?.startNewSlot(index)}>{slot?"NEW RUN IN THIS SLOT":"START NEW RUN"}</button></article>)}
       </div></MenuShell>}
-      {screen === "boons" && <MenuShell title="BOONS" subtitle="Choose run modifiers · Negative Boons advance regular doors twice as fast" onClose={()=>showScreen("start")}><div className="badge-grid">{BOONS.map(b=><article key={b.id} className={selectedBoons.includes(b.id)?"earned":""}><span>{b.negative?"NEGATIVE / CHALLENGE":"POSITIVE"}</span><strong>{b.name}</strong><p>{b.note}</p><button onClick={()=>actionRef.current?.toggleBoon(b.id)}>{selectedBoons.includes(b.id)?"REMOVE":"ACTIVATE"}</button></article>)}</div></MenuShell>}
+      {screen === "boons" && <MenuShell title="BOONS" subtitle="Choose Boons, then confirm to enter your run · Saved Boons remain active" onClose={()=>showScreen("saves")}><button className="primary-button" onClick={()=>actionRef.current?.confirmBoons()}>CONFIRM BOONS · ENTER RUN</button><div className="badge-grid">{BOONS.map(b=><article key={b.id} className={selectedBoons.includes(b.id)?"earned":""}><span>{b.negative?"NEGATIVE / CHALLENGE":"POSITIVE"}</span><strong>{b.name}</strong><p>{b.note}</p><button onClick={()=>actionRef.current?.toggleBoon(b.id)}>{selectedBoons.includes(b.id)?"REMOVE":"ACTIVATE"}</button></article>)}</div></MenuShell>}
+      {screen === "memory" && <MenuShell title="X::::RamYraM::::X" subtitle={hud.encounters.memory?.phase==="quiz"?"Which number did I show you? A wrong answer grants a random negative Boon.":"Remember this number. I will ask again at a future prime door."} onClose={()=>{}}><div className="memory-trial">{hud.encounters.memory?.phase==="reveal"?<><strong className="memory-number">{hud.encounters.memory.number}</strong><button className="primary-button" onClick={()=>actionRef.current?.rememberNumber()}>I HAVE MEMORIZED IT · CONTINUE</button></>:hud.encounters.memory?.choices.map(answer=><button key={answer} onClick={()=>actionRef.current?.answerMemory(answer)}>{answer}</button>)}</div></MenuShell>}
       {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle={`You are ${hud.playerName} · two players · real-time WebRTC`} onClose={() => {if(runtimeRef.current?.room===1&&!partyRef.current?.code)showScreen("start");else showScreen("pause");}}><div className="party-panel"><p>{partyStatus}</p>{hud.partyCode&&<><div className="party-code">{hud.partyCode}</div><p>{hud.playerName}{hud.teammateName?` + ${hud.teammateName}`:" · WAITING FOR A NAMED SURVIVOR"}</p></>}<button onClick={() => void actionRef.current?.hostParty()} disabled={Boolean(hud.partyCode)}>HOST A ROOM</button><label htmlFor="ion-party-code">JOIN A FRIEND</label><div className="party-join"><input id="ion-party-code" inputMode="text" maxLength={6} value={partyInput} onChange={event=>setPartyInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,6))} placeholder="ROOM CODE" /><button disabled={!validPartyCode(partyInput)} onClick={()=>void actionRef.current?.joinParty(partyInput)}>ENTER</button></div><p className="party-note">Keep the host page open until the second randomized survivor name appears. Cross-network connections use multiple encrypted WebRTC routes automatically.</p>{hud.partyCode&&<button className="secondary" onClick={()=>{actionRef.current?.leaveParty();showScreen("pause");}}>LEAVE PARTY</button>}{hud.partyCode&&<button onClick={()=>actionRef.current?.resume()}>RETURN TO GAME</button>}</div></MenuShell>}
       {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/${BADGES.length} unlocked · Daily permission required`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-code-panel"><label htmlFor="ion-badge-code">DAILY BADGE PERMISSION</label><div className="badge-code-entry"><input id="ion-badge-code" inputMode="text" maxLength={32} value={badgeInput} onChange={event=>setBadgeInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,32))} placeholder="DAILY PERMISSION"/><button disabled={!badgeInput} onClick={()=>actionRef.current?.redeemBadgeCode(badgeInput)}>AUTHORIZE</button></div><small>{permissionDate===permissionDay()?"Authorized today · select a badge below":"Badge awards are locked until today’s permission is entered."}</small></div><div className="badge-grid">{BADGES.map(b=>{const earned=badgeProgress.unlocked.includes(b.id);const rarity=b.rarity??"standard";const classified=rarity==="starplus"&&!earned&&permissionDate!==permissionDay();const rarityLabel=rarity==="starplus"?"*+*":rarity.toUpperCase();return <article key={b.id} className={`${earned?"earned":"locked"} badge-${rarity}`}><span>{earned?"★ EARNED":"◇ LOCKED"} · {rarityLabel}</span><strong>{classified?"CLASSIFIED":b.title}</strong><p>{classified?"This badge can only be given by a secret facility condition.":b.description}</p>{!classified&&b.tutorial&&<small>FIELD TUTORIAL: {b.tutorial}</small>}{!earned&&permissionDate===permissionDay()&&<button onClick={()=>actionRef.current?.grantBadge(b.id)}>SELECT THIS BADGE</button>}</article>})}</div></MenuShell>}
       {screen === "win" && <section className="win-screen overlay-panel"><span className="eyebrow">EXTRACTION ROOM · SIGNAL RESTORED</span><h2>YOU REACHED<br /><strong>ROOM 200</strong></h2><p>Every infusion is stable. The blast doors open. Something below them keeps smiling.</p><div className="completion-ring" style={{ "--completion": `${discoveredPercent}%` } as React.CSSProperties}><span>7 / 7</span><small>INFUSIONS</small></div><button className="primary-button" onClick={() => actionRef.current?.start(true)}>DESCEND AGAIN</button><button className="text-button" onClick={() => actionRef.current?.exploreExtraction()}>EXPLORE EXTRACTION</button></section>}
@@ -2767,7 +2872,7 @@ export default function IonGame() {
         <article className="pers-offer basdino-offer"><span>10 FLUORITE</span><h3>BASDINO BOND</h3><p>A loyal Basdino follows you through the facility and sacrifices itself to absorb one fatal contact.</p><button onClick={() => actionRef.current?.buyBasdino()}>BOND BASDINO</button></article>
         <aside className="pers-balance"><small>CURRENCY</small><strong>{hud.crystals.fluorite}</strong><span>FLUORITE</span><small>COMPANIONS</small><strong>{hud.basdinos}</strong><span>BASDINOS</span></aside>
       </div></MenuShell>}
-      {screen === "inventory" && <MenuShell title="FIELD INVENTORY" subtitle={`${inventoryCount} carried items · ${hud.basdinos} Basdino bonus lives · ${hud.wardCharges} active wards`} onClose={() => actionRef.current?.close()}><div className="inventory-grid">
+      {screen === "inventory" && <MenuShell title="FIELD INVENTORY" subtitle={`${inventoryCount} carried items · ${hud.basdinos} Basdino bonus lives · ${hud.wardCharges} active wards`} onClose={() => actionRef.current?.close()}><div className="inventory-grid">{hud.encounters.voidDebt&&<button className="item-card" onClick={()=>actionRef.current?.offerVoid()}><strong>OFFER CRYSTALS TO VOID</strong><p>{hud.encounters.voidDebt.paid}/50 paid · {hud.encounters.voidDebt.doorsLeft} doors remain. All carried crystal types count.</p></button>}
         {hud.jar&&<button className="item-card essence-jar" onClick={() => actionRef.current?.toggleJar()}><span>{hud.jarEquipped?"EQUIPPED":"STOWED"}</span><strong>ESSENCE JAR</strong><p>{hud.essence?"Filled with whirlpool Essence. Shoot Pers, then use the glitch with one Malachite.":"Equip this jar, jump into a whirlpool, and it will collect Essence."}</p><i>{hud.jarEquipped?"STOW JAR":"EQUIP JAR"}</i></button>}
         {(Object.keys(ITEMS) as ItemKey[]).map((key) => <button key={key} className="item-card" disabled={hud.inventory[key] <= 0} onClick={() => actionRef.current?.useItem(key)} style={{ "--item": ITEMS[key].color } as React.CSSProperties}><span>{hud.inventory[key]} OWNED</span><strong>{ITEMS[key].label}</strong><p>{ITEMS[key].note}</p><i>{key === "soul" ? "CHOOSE TARGET" : "USE ITEM"}</i></button>)}
       </div></MenuShell>}
