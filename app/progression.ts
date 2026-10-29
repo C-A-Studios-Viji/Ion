@@ -1,3 +1,4 @@
+import { ROOM_TYPES, ROOM_LABELS } from './roomTypes';
 import { negativeBoons } from "./boons";
 export type BadgeEvent =
   | "room" | "crystal" | "encounter" | "escape" | "kill" | "death" | "craft"
@@ -50,16 +51,24 @@ export const BADGES: Badge[] = [
 if (BADGES.length !== 125 || new Set(BADGES.map(b => b.id)).size !== 125) throw new Error("Badge catalog must contain 125 unique badges");
 // Exactly 40% of the archive is intentionally undocumented. Secret-tier records and
 // Ascendidox are always among them; the remainder is distributed across the catalog.
-BADGES.push(...negativeBoons.flatMap(boon=>Array.from({length:30},(_,i)=>({id:`boon-${boon.id}-${i+1}`,title:`${boon.name} · Trial ${i+1}`,description:`Cross ${(i+1)*5} doors with ${boon.name} active. Daily permission is required.`,event:"boon" as const,detail:boon.id,target:(i+1)*5,rarity:"xtraultra" as const,tutorial:`Activate ${boon.name} before the run and survive ${(i+1)*5} door advances.`}))));
+BADGES.push(...negativeBoons.flatMap(boon=>Array.from({length:5},(_,i)=>({id:`boon-${boon.id}-${i+1}`,title:`${boon.name} · Trial ${i+1}`,description:`Cross ${(i+1)*5} doors with ${boon.name} active. Daily permission is required.`,event:"boon" as const,detail:boon.id,target:(i+1)*5,rarity:"xtraultra" as const,tutorial:`Activate ${boon.name} before the run and survive ${(i+1)*5} door advances.`}))));
 BADGES.push({id:'ten-souls-one-heartbeat',title:'10 Souls, 1 Heartbeat',description:'Survive the full LORE route and the final mega chase.',event:'secret',target:1,detail:'lore-finale',rarity:'plus'});
+BADGES.push(...ROOM_TYPES.map(type=>({id:`layout-${type}`,title:type==='inversion'?'Wrong Way Home':ROOM_LABELS[type],description:type==='inversion'?'Escape INVERSION alive with reversed movement.':`Explore a ${ROOM_LABELS[type]} room.`,event:'secret' as const,detail:`layout-${type}`,target:1,rarity:type==='inversion'?'ultra' as const:'rare' as const,tutorial:type==='inversion'?'S moves forward; W moves back. Break three crystal anchors, take cover from purple warnings, then escape Pers.':`Find and enter a ${ROOM_LABELS[type]} during a descent.`})));
+if(Number(BADGES.length)!==250 || new Set(BADGES.map(b=>b.id)).size!==250)throw new Error('Expected exactly 250 unique badges');
 const tutorialPriority=[...BADGES.filter(b=>b.rarity==="starplus"||b.id==="ascendidox"),...BADGES.filter((_,index)=>index%5===0||index%5===2),...BADGES];
 const tutoriallessIds=new Set<string>();
 for(const badge of tutorialPriority){if(tutoriallessIds.size>=BADGES.length*.4)break;tutoriallessIds.add(badge.id);}
 BADGES.forEach(b=>{if(tutoriallessIds.has(b.id))delete b.tutorial;else if(!b.tutorial)b.tutorial=b.description;});
 export const TUTORIALLESS_BADGE_COUNT=BADGES.filter(b=>!b.tutorial).length;
 
-export type BadgeProgress = { unlocked: string[]; counts: Partial<Record<BadgeEvent, number>>; detailCounts: Record<string, number> };
+export type BadgeProgress = { unlocked: string[]; counts: Partial<Record<BadgeEvent, number>>; detailCounts: Record<string, number>; retiredUnlocked?: string[] };
 export const emptyBadgeProgress = (): BadgeProgress => ({unlocked:[],counts:{},detailCounts:{}});
+/** Keep historical awards, while only current badges count toward the 250 archive. */
+export function migrateBadgeProgress(progress: BadgeProgress): BadgeProgress {
+ const ids=new Set(BADGES.map(b=>b.id)), current=new Set<string>(), retired=new Set(progress.retiredUnlocked??[]);
+ for(const id of progress.unlocked){if(ids.has(id))current.add(id);else {retired.add(id);const match=/^(boon-.+)-(\d+)$/.exec(id);if(match&&Number(match[2])>5&&ids.has(`${match[1]}-5`))current.add(`${match[1]}-5`);}}
+ return {...progress,unlocked:[...current],retiredUnlocked:[...retired]};
+}
 /** Roll the first crawler, then give each additional crawler a smaller conditional chance. */
 export function rollCrawlerPack(rand:()=>number,tier:number):number {
   if(rand()>=.2+tier*.045)return 0;
