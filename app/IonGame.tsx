@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { addRockyCaveFloor } from "./caveFloor";
-import { createFacilitySurfaces, studioEnvironment, dressFacility } from "./artDirection";
 import { ModelAssets, animateModel, disposeModel } from "./modelAssets";
 import { createMonster, animateMonster, MONSTER_NAMES, MONSTER_COLORS, type MonsterKind } from "./monsterModels";
 import { blobChaseSpeed, chaseForRoom, chaseRoomRules, exitRequirements, type ChaseState } from "./encounters";
@@ -836,7 +835,6 @@ export default function IonGame() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.72;
     const scene = new THREE.Scene();
-    const disposeEnvironment=studioEnvironment(renderer,scene);
     scene.background = new THREE.Color(0x010306);
     scene.fog = new THREE.FogExp2(0x03090b, 0.047);
     const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 100);
@@ -991,9 +989,8 @@ export default function IonGame() {
       }
     };
 
-    const surfaces=createFacilitySurfaces();
-    const baseMaterial=surfaces.metal;
-    const caveMaterial=surfaces.stone;
+    const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x10171a, roughness: 0.62, metalness: 0.28 });
+    const caveMaterial = new THREE.MeshStandardMaterial({ color: 0x101817, roughness: 0.72, metalness: 0.12 });
     const blackMaterial = new THREE.MeshStandardMaterial({ color: 0x020205, roughness: 0.18, metalness: 0.62 });
 
     function updateHud(force = false) {
@@ -1110,13 +1107,9 @@ export default function IonGame() {
       const info = CRYSTALS[key];
       const imported = assets.create(`mineral_${key}` as import("./modelAssets").ModelKey, {
         height: size * (collectible ? 0.72 : 1.15), tint: info.color,
-        emissive: key === "obsidian" ? 0.05 : key === "corrupted" ? .7 : .18,
+        emissive: key === "obsidian" ? 0.18 : key === "corrupted" ? 1.1 : 0.48,
       });
-      if (imported) {
-        imported.userData.crystal = key;
-        if(!collectible){const bed=new THREE.Mesh(new THREE.CylinderGeometry(size*.38,size*.52,size*.12,7),new THREE.MeshStandardMaterial({color:0x1a222b,roughness:.95}));bed.position.y=size*.015;imported.add(bed);}
-        return imported;
-      }
+      if (imported) { imported.userData.crystal = key; return imported; }
       const material = new THREE.MeshPhysicalMaterial({ color: info.color, emissive: info.color,
         emissiveIntensity: key === "obsidian" ? 0.18 : key === "corrupted" ? 1.4 : 0.52,
         roughness: key === "malachite" ? 0.48 : 0.18, metalness: key === "obsidian" ? 0.68 : 0.08,
@@ -1711,8 +1704,8 @@ export default function IonGame() {
       const corruption = runtime.tier / 7;
       const fogColor = new THREE.Color().setRGB(0.008 + corruption * 0.035, 0.025 - corruption * 0.012, 0.03 + corruption * 0.025);
       scene.background = new THREE.Color(runtime.ascendedWorld?0x211603:runtime.paradoxWorld?0x130827:0x020b20);
-      scene.fog = new THREE.FogExp2(runtime.ascendedWorld?0x60420b:runtime.paradoxWorld?0x2f164b:0x101b25, runtime.chaseRoom ? 0.009 : 0.014 + runtime.tier * 0.001);
-      renderer.toneMappingExposure = runtime.ascendedWorld ? 1.04 : runtime.paradoxWorld ? .78 : runtime.chaseRoom ? 1.15 : Math.max(.76,.98-runtime.tier*.02);
+      scene.fog = new THREE.FogExp2(runtime.ascendedWorld?0x60420b:runtime.paradoxWorld?0x2f164b:0x081d37, runtime.chaseRoom ? 0.012 : 0.026 + runtime.tier * 0.002);
+      renderer.toneMappingExposure = runtime.ascendedWorld ? 1.04 : runtime.paradoxWorld ? 0.62 : runtime.chaseRoom ? 1.22 : Math.max(0.52, 0.76 - runtime.tier * 0.028);
       const floorMaterial = cave ? caveMaterial.clone() : baseMaterial.clone(); floorMaterial.color.offsetHSL(0, 0, -runtime.tier * 0.008);
       const floor=addMesh(new THREE.PlaneGeometry(runtime.roomWidth, runtime.roomLength), floorMaterial, new THREE.Vector3(), new THREE.Euler(-Math.PI / 2, 0, 0));floor.userData.facilityFloor=true;
       addMesh(new THREE.PlaneGeometry(runtime.roomWidth, runtime.roomLength), floorMaterial.clone(), new THREE.Vector3(0, runtime.roomHeight, 0), new THREE.Euler(Math.PI / 2, 0, 0));
@@ -1735,12 +1728,12 @@ export default function IonGame() {
         new THREE.Vector3(0, 0, -runtime.roomLength / 2 - 2), new THREE.Euler(-Math.PI / 2, 0, 0));
       addBloodSplatters(rand, room);
       addTrapdoor();
-      runtime.roomGroup.add(new THREE.HemisphereLight(0x96c4dd,0x24202c,runtime.chaseRoom?.85:.65));
+      runtime.roomGroup.add(new THREE.HemisphereLight(0x7ebdff,0x020817,runtime.chaseRoom?0.75:0.48));
       addCaveSunlight();
       const lampCount = runtime.chaseRoom ? 14 + runtime.chaseLevel * 2 : Math.max(1, 4 - Math.floor(runtime.tier / 2));
       for (let i = 0; i < lampCount; i += 1) {
         const z = runtime.roomLength / 2 - 4 - i * (runtime.roomLength - 8) / Math.max(1, lampCount - 1);
-        const light = new THREE.PointLight(runtime.chaseRoom ? 0xf2ffff : i % 3 === 0 ? 0xffb65e : 0x8acfe3, runtime.chaseRoom ? 35 : 15, runtime.chaseRoom ? 14 : 9, 1.5);
+        const light = new THREE.PointLight(runtime.chaseRoom ? 0xf2ffff : i % 3 === 0 && runtime.tier > 2 ? 0xff355f : 0xb6e2ee, runtime.chaseRoom ? 35 : 15, runtime.chaseRoom ? 14 : 9, 1.5);
         light.position.set((rand() - 0.5) * 2, runtime.roomHeight - 0.42, z); light.castShadow = i < 2;
         runtime.roomGroup.add(light); runtime.flickerLights.push(light);
         const lamp = addMesh(new THREE.BoxGeometry(runtime.chaseRoom ? 4.2 : 1.4, 0.11, 0.22),
@@ -1935,7 +1928,6 @@ export default function IonGame() {
       }
       if(runtime.layout!=='inversion')buildEntityEvents(restore);
       finishRoomLayout(Boolean(restore));
-      dressFacility(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,runtime.layout,room);
       if(cave)addRockyCaveFloor(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position)]);
       if(runtime.layout!=='standard'&&runtime.layout!=='inversion')badge('secret',`layout-${runtime.layout}`);
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
@@ -2687,7 +2679,7 @@ export default function IonGame() {
       runtime.flashlight.distance = (runtime.lightInfusion === "quartz" ? 42 : 31)*(runtime.boons.includes("longbeam")?1.5:1)*(runtime.boons.includes("shortsight")?.55:1);
       runtime.flashlight.angle = runtime.lightInfusion === "quartz" ? 0.56 : 0.44; runtime.flashlight.penumbra = 0.64;
       runtime.luxuryLight.intensity = 0;
-      renderer.toneMappingExposure = runtime.ascendedWorld ? 1.04 : runtime.paradoxWorld ? .78 : runtime.chaseRoom ? 1.15 : Math.max(.76,.98-runtime.tier*.02);
+      renderer.toneMappingExposure = runtime.ascendedWorld ? 1.04 : runtime.paradoxWorld ? 0.62 : runtime.chaseRoom ? 1.22 : Math.max(0.52, 0.76 - runtime.tier * 0.028);
       if (runtime.transition <= 0 && runtime.player.z < -runtime.roomLength / 2 - 0.82 && runtime.doorProgress > 0.82) { runtime.transition = 1; runtime.transitionDirection = 1; }
     }
     function updateEnemies(dt: number) {
@@ -2949,7 +2941,6 @@ export default function IonGame() {
       delete document.body.dataset.paradox;delete document.body.dataset.ascended;delete document.body.dataset.riftfall;
       window.removeEventListener("resize", onResize); window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("mousemove", onMouseMove); window.removeEventListener("mousedown", onMouseDown); document.removeEventListener("pointerlockchange", onPointerLock);
-      disposeEnvironment();surfaces.texture.dispose();baseMaterial.dispose();caveMaterial.dispose();
       renderer.dispose(); runtime.audio?.context.close().catch(() => undefined); runtimeRef.current = null;
     };
   }, []);
@@ -3001,10 +2992,8 @@ export default function IonGame() {
         {hud.prompt && !screen && <div className="interaction-prompt">{hud.prompt}</div>}{toast && <div className="toast">{toast}</div>}
       </> : null}
       {screen === "start" && <section className="title-screen overlay-panel">
-        <div className="revamp-edition"><i /> CRYSTALLINE / RESEARCH DIVISION <span>VOL. 02</span></div>
-        <div className="title-mark"><span>THE FACILITY IS STILL LISTENING</span><h1>I<span>O</span>N<span className="title-period">.</span></h1><p>Beautiful things grow<br/>in terrible places.</p></div>
-        <div className="mineral-display" aria-hidden="true"><div className="specimen-orbit"/><div className="specimen-shard shard-one"/><div className="specimen-shard shard-two"/><div className="specimen-shard shard-three"/><span>SPECIMEN 004 / AMETHYST</span><small>CONTAINMENT STATUS: UNSTABLE</small></div>
-        <div className="mission-brief"><p>200 doors below the surface. <strong>One way out.</strong></p><div className="rules-grid">
+        <div className="title-mark"><span>UNDERGROUND RESEARCH COMPLEX · SIGNAL 07</span><h1>I<span>O</span>N</h1><p>Crystal light is beautiful. It is not safe.</p></div>
+        <div className="mission-brief"><p>Reach <strong>Room 200</strong>. Recover every infusion. Survive contact.</p><div className="rules-grid">
           <span><b>7% GRIN ROLL</b> gives 10 seconds to hide</span><span><b>FLUORITE</b> is synthesized currency for Pers</span><span><b>ROOM 25×</b> starts a Blob chase · Hub at 32</span></div></div>
         <button className="text-button" onClick={()=>showScreen("boons")}>BOONS · {selectedBoons.length} SELECTED</button><button className="primary-button" onClick={() => showScreen("saves")}>PLAY · SAVED RUNS</button>
         <button className="text-button" onClick={() => showScreen("party")}>PLAY WITH A FRIEND</button>

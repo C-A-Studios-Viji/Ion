@@ -70,3 +70,10 @@ path lights, surface textures, dust and redesigned interface are original ION
 code. The environmental reflections use Three.js RoomEnvironment under the same
 MIT licence as the installed Three.js dependency; no external HDR download is
 required. All assets needed by gameplay are bundled, with procedural fallbacks.
+
+### Presentation rollback
+
+The green terminal interface, original lighting, fog, materials and mineral
+gradients have been restored. The CRYSTALLINE studio reflections, industrial
+decorations and slate/amber interface described above are no longer active.
+The seven CC0 STL meshes and cosmetic cave rocks remain in use.

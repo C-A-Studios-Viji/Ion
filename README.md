@@ -185,13 +185,11 @@ INVERSION swaps W/S and A/D (including touch movement). Purple light warns of Pe
 
 The archive contains exactly 250 badges, with 100 tutorials hidden. Retired Boon trials are preserved in browser save history; retained badges and counters carry forward.
 
-## CRYSTALLINE visual edition
+## Visual style and crystal assets
 
-The visual refresh bundles seven distinct CC0 STL mineral meshes and adds
-faceted physical materials, studio reflections, industrial surface textures,
-wall panels, pipes, door-number displays and path lighting. The Home screen,
-HUD, inventory, saves and badge screens share a slate/amber field-instrument
-style. All established room types, routes and progression rules remain active.
-See ASSET_CREDITS.md and app/assets/minerals/SOURCE.md for the exact asset origins.
+ION uses its original green terminal menus, HUD, neon mineral gradients,
+dark facility materials, lighting and fog. The seven distinct CC0 STL crystal
+meshes remain bundled with procedural fallbacks. See ASSET_CREDITS.md and
+app/assets/minerals/SOURCE.md for the exact asset origins.
 
 Cave rooms add dense cosmetic gravel, broken slabs and uneven ground detail. These meshes never enter movement colliders, so walking and jumping use the established smooth floor. Pickups, stations, entrances and exits have clear space around them.
