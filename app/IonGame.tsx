@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { addRockyCaveFloor } from "./caveFloor";
 import { createFacilitySurfaces, studioEnvironment, dressFacility } from "./artDirection";
 import { ModelAssets, animateModel, disposeModel } from "./modelAssets";
 import { createMonster, animateMonster, MONSTER_NAMES, MONSTER_COLORS, type MonsterKind } from "./monsterModels";
@@ -1935,6 +1936,7 @@ export default function IonGame() {
       if(runtime.layout!=='inversion')buildEntityEvents(restore);
       finishRoomLayout(Boolean(restore));
       dressFacility(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,runtime.layout,room);
+      if(cave)addRockyCaveFloor(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position)]);
       if(runtime.layout!=='standard'&&runtime.layout!=='inversion')badge('secret',`layout-${runtime.layout}`);
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
       if(!restore && activeSlotRef.current !== null) saveRun(false);

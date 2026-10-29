@@ -193,3 +193,5 @@ wall panels, pipes, door-number displays and path lighting. The Home screen,
 HUD, inventory, saves and badge screens share a slate/amber field-instrument
 style. All established room types, routes and progression rules remain active.
 See ASSET_CREDITS.md and app/assets/minerals/SOURCE.md for the exact asset origins.
+
+Cave rooms add dense cosmetic gravel, broken slabs and uneven ground detail. These meshes never enter movement colliders, so walking and jumping use the established smooth floor. Pickups, stations, entrances and exits have clear space around them.
