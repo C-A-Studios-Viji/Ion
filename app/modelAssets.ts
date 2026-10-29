@@ -151,6 +151,7 @@ export function disposeModel(root: THREE.Object3D, textures = false) {
     if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(mixer.getRoot()); }
     if (!(node instanceof THREE.Mesh || node instanceof THREE.Points || node instanceof THREE.Line)) return;
     node.geometry.dispose();
+    if (node instanceof THREE.InstancedMesh) node.dispose();
     if (node instanceof THREE.SkinnedMesh) node.skeleton.dispose();
     (Array.isArray(node.material) ? node.material : [node.material]).forEach((material) => {
       if (textures) Object.values(material).forEach((value) => { if (value instanceof THREE.Texture) value.dispose(); });

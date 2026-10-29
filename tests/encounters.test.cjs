@@ -452,3 +452,28 @@ test('room geometry has a traversable route to the exit and each required object
   for(const object of objectives)assert(reachable.some(p=>p.distanceTo(object.position)<2.25),type+' objective blocked at '+object.position.toArray());
  }
 });
+
+
+test('cave floors have dense uneven cosmetic rocks without adding movement collisions',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();
+ const {addRockyCaveFloor}=h.load(path.join(root,'app/caveFloor.ts'));
+ const types=h.load(path.join(root,'app/roomTypes.ts'));
+ const group=new THREE.Group(),clear=[new THREE.Vector3(4,0,3)];
+ const detail=addRockyCaveFloor(group,24,44,'standard',12,clear);
+ assert.equal(detail.userData.cosmeticOnly,true);
+ const skin=detail.getObjectByName('uneven-cave-skin');let low=99,high=-99;
+ for(let i=0;i<skin.geometry.attributes.position.count;i++){const y=skin.geometry.attributes.position.getY(i);low=Math.min(low,y);high=Math.max(high,y);}
+ assert(high-low>.1);
+ const matrix=new THREE.Matrix4(),position=new THREE.Vector3(),rotation=new THREE.Quaternion(),scale=new THREE.Vector3();let rocks=0;
+ detail.children.filter(o=>o instanceof THREE.InstancedMesh).forEach(o=>{
+  rocks+=o.count;
+  for(let i=0;i<o.count;i++){o.getMatrixAt(i,matrix);matrix.decompose(position,rotation,scale);assert(position.distanceTo(clear[0])>1.15);}
+ });assert(rocks>250);
+ const obstacles=h.runtime.obstacles.length;
+ addRockyCaveFloor(h.runtime.roomGroup,18,25,'standard',1,[]);
+ assert.equal(h.runtime.obstacles.length,obstacles);
+ h.enter(2);assert(h.runtime.roomGroup.getObjectByName('cave-floor-decoration'));
+ h.runtime.enemies=[];h.runtime.hazards=[];h.runtime.grinIncoming=false;h.runtime.noiseActive=false;
+ h.runtime.keysDown.add('KeyW');
+ for(let i=0;i<80;i++){h.step(.05);assert(Math.abs(h.runtime.player.y-(types.roomFloor(h.runtime.layout,h.runtime.roomLength,h.runtime.player.z)+1.65))<.001);}
+});
