@@ -80,18 +80,24 @@ test('actual chase rooms contain reachable specimens and four resonators; keys c
   const h=gameHarness();await Promise.resolve();await Promise.resolve();
   for(const room of [25,26,28,50,75,179]){
     h.enter(room);const r=h.runtime;r.enemies.forEach(e=>{if(e.kind!=='noise')e.alive=false;});
-    assert.equal(r.chaseRoom,true);assert.equal(r.requiredResonators,4);assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,5);
+    assert.equal(r.chaseRoom,true);assert.equal(r.requiredResonators,4);assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,3);
+    assert(r.pickups.filter(p=>p.kind==='specimen').every(p=>p.object.userData.sealedCapsule));
     const stations=r.stations.filter(s=>s.kind==='resonator');assert.equal(stations.length,4);
+    assert(stations.every(s=>s.object.userData.sealedResonator));
     for(const p of [...stations,...r.pickups.filter(p=>p.kind==='specimen'||p.mandatory)]){
       const box=new THREE.Box3().setFromCenterAndSize(p.object.position.clone().setY(1.2),new THREE.Vector3(.68,1.5,.68));
       assert(!r.obstacles.some(o=>o.intersectsBox(box)),`blocked task in room ${room}`);
     }
     r.nearest={kind:'door'};h.act.interact();assert.equal(r.doorUnlocked,false);assert.equal(r.accessKeys,10);
     for(const p of [...r.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);
+    h.useAt(r.stations.find(s=>s.kind==='cabinet').object);
+    assert.equal(r.noiseCount,4);
+    const quartz=r.pickups.find(p=>p.kind==='crystal'&&p.crystal==='quartz');assert(quartz);h.useAt(quartz.object);
+    h.useAt(r.stations.find(s=>s.kind==='noiseCore').object);
     assert.equal(r.noiseCount,5);assert.equal(r.noiseActive,false);assert.equal(r.doorUnlocked,false);
     for(const s of stations)h.useAt(s.object);
     for(const p of [...r.pickups.filter(p=>p.mandatory)])h.useAt(p.object);
-    assert.equal(r.activeResonators,4);assert.equal(r.doorUnlocked,true);assert.equal(r.doorOpening,true);
+    assert.equal(r.activeResonators,4,`resonators in ${room}`);assert.equal(r.doorUnlocked,true,`door in ${room}`);assert.equal(r.doorOpening,true,`opening in ${room}`);
   }
 });
 
@@ -101,6 +107,9 @@ test('Noise expiration is fatal even in a trapdoor; collection stops the deadlin
   assert.equal(r.dead,true);assert.equal(r.deathKind,'noise');assert(r.scareActor);assert.equal(r.wardCharges,2);
   h.enter(25);r.enemies.forEach(e=>e.alive=false);
   for(const p of [...r.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);
+  h.useAt(r.stations.find(s=>s.kind==='cabinet').object);
+  h.useAt(r.pickups.find(p=>p.kind==='crystal'&&p.crystal==='quartz').object);
+  h.useAt(r.stations.find(s=>s.kind==='noiseCore').object);
   r.noiseTime=.01;h.step(.5);assert.equal(r.dead,false);
 });
 
