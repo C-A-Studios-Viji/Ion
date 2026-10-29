@@ -122,7 +122,7 @@ type Pickup = {
 
 type Station = {
   object: THREE.Group;
-  kind: "crafter" | "infusionsmith" | "archive" | "resonator" | "trapdoor" | "pershub" | "rift" | "cabinet" | "blood" | "rainbow" | "voiddoor" | "voidoffering" | "lore";
+  kind: "crafter" | "infusionsmith" | "archive" | "resonator" | "noiseCore" | "trapdoor" | "pershub" | "rift" | "cabinet" | "blood" | "rainbow" | "voiddoor" | "voidoffering" | "lore";
   activated?: boolean;
   needsShield?: boolean;
 };
@@ -300,6 +300,7 @@ type SaveData = {
   banishedUntil?: Partial<Record<EnemyKind, number>>;
   removedPickups?: number[];
   activatedResonators?: number[];
+  noiseCoreOpened?: boolean;
   openedCabinets?: number[];
   mandatoryCollected?: boolean;
   noiseCount?: number;
@@ -1493,12 +1494,17 @@ export default function IonGame() {
 
     function addNoiseEncounter() {
       if (!runtime.noiseActive) return;
-      for(let i=0;i<5;i++) {
+      // Three capsules are sealed inside crystal geodes; a fourth is in the
+      // room's cabinet, and the fifth is held by Noise itself.
+      for(let i=0;i<3;i++) {
         const z=runtime.roomLength/2-6-(i+.5)*(runtime.roomLength-14)/5;
-        makePickup("specimen",new THREE.Vector3((i%2?1:-1)*.7,.85,z));
+        const shell=makePickup("specimen",new THREE.Vector3((i%2?1:-1)*.7,.85,z));
+        shell.clear();shell.add(createCrystal(i===0?"quartz":i===1?"obsidian":"citrine",.8));
+        shell.userData.sealedCapsule=true;
       }
       const object=createEntityModel("noise");object.position.set(0,.1,-runtime.roomLength/2+4);runtime.roomGroup.add(object);
       runtime.enemies.push({object,kind:"noise",speed:0,alive:true,teleportTimer:99,phase:0,wanderTarget:new THREE.Vector3(),wanderTimer:99});
+      runtime.stations.push({kind:"noiseCore",object,activated:false});
       badge("encounter","noise");
     }
 
@@ -1736,6 +1742,9 @@ export default function IonGame() {
         makePickup("crystal",new THREE.Vector3(-2.35,.35,-runtime.roomLength/2+5.5),"citrine");
         makePickup("crystal",new THREE.Vector3(2.35,.35,-runtime.roomLength/2+5.5),"obsidian");
       }
+      if(runtime.noiseActive && !runtime.crystals.quartz && !runtime.crystals.obsidian && !runtime.crystals.citrine){
+        makePickup("crystal",new THREE.Vector3(2.4,.35,runtime.roomLength/2-4.6),"quartz");
+      }
       if (room >= 4 && room !== 200 && (rand() < 0.62 + runtime.tier * 0.045 || room % 5 === 0)) {
         const whirlpoolCount = Math.min(3, 1 + Math.floor(runtime.tier / 3));
         for (let i = 0; i < whirlpoolCount; i += 1) {
@@ -1752,7 +1761,8 @@ export default function IonGame() {
         for (let i = 0; i < runtime.requiredResonators; i += 1) {
           const x = (i % 2 ? 1 : -1) * (runtime.chaseRoom ? 1.8 : runtime.roomWidth / 2 - 1.25);
           const z = runtime.chaseRoom ? runtime.roomLength/2-8-(i+1)*(runtime.roomLength-18)/5 : -runtime.roomLength / 2 + 4 + i * ((runtime.roomLength - 8) / Math.max(1, runtime.requiredResonators - 1));
-          const resonator = createStation("resonator", runtime.haidIniActive ? 0xff6a00 : 0xff375f); resonator.scale.setScalar(runtime.haidIniActive ? 0.44 : 0.62); resonator.position.set(x, 0, z);
+          const resonator = createCrystal(i%3===0?"quartz":i%3===1?"obsidian":"citrine",runtime.haidIniActive?.48:.7); resonator.position.set(x, 0, z);
+          resonator.userData.sealedResonator=true;
           resonator.rotation.y = x < 0 ? Math.PI / 2 : -Math.PI / 2; runtime.roomGroup.add(resonator);
           runtime.stations.push({ object: resonator, kind: "resonator", activated: false, needsShield: !runtime.chaseRoom && !runtime.haidIniActive && room % 7 === 0 && i === 0 });
         }
@@ -1821,10 +1831,13 @@ export default function IonGame() {
         (restore.activatedResonators ?? []).forEach(id=>{
           const station=runtime.stations[id];if(station?.kind==="resonator"){
             station.activated=true;
+            if(station.object.userData.sealedResonator){station.object.clear();station.object.add(createStation("resonator",0x37ffb2));}
             station.object.traverse(child=>{if(child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial)child.material.emissive?.set(0x37ffb2);});
           }
         });
         runtime.activeResonators=runtime.stations.filter(s=>s.kind==="resonator"&&s.activated).length;
+        const noiseCore=runtime.stations.find(s=>s.kind==="noiseCore");
+        if(noiseCore)noiseCore.activated=restore.noiseCoreOpened??false;
         runtime.noiseCount=restore.noiseCount ?? 0;runtime.noiseTime=restore.noiseTime ?? runtime.noiseTime;
         runtime.mandatoryCollected=restore.mandatoryCollected ?? runtime.mandatoryCollected;
         if(restore.playerPosition?.length===3)runtime.player.set(...restore.playerPosition);
@@ -1911,6 +1924,7 @@ export default function IonGame() {
         loreRoute:{...runtime.loreRoute},encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,boonieMet:runtime.boonieMet,accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
         wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil },
         openedCabinets:runtime.stations.flatMap((s,i)=>s.kind==="cabinet"&&s.activated?[i]:[]),
+        noiseCoreOpened:runtime.stations.some(s=>s.kind==="noiseCore"&&s.activated),
         removedPickups:[...runtime.removedPickups], activatedResonators:runtime.stations.flatMap((s,i)=>s.kind==="resonator"&&s.activated?[i]:[]),
         mandatoryCollected:runtime.mandatoryCollected,noiseCount:runtime.noiseCount,noiseTime:runtime.noiseTime,
         noiseActive:runtime.noiseActive,haidIniActive:runtime.haidIniActive,grinIncoming:runtime.grinIncoming,
@@ -2155,11 +2169,7 @@ export default function IonGame() {
         if(result==="infusion")applyBoon("infused");
         notify(`CANDY · ${result.toUpperCase()}`);
       } else if (pickup.kind === "specimen") {
-        badge("specimen");
-        runtime.noiseCount += 1;
-        runtime.enemies.filter(e=>e.kind==="blob"||e.kind==="remetons").forEach(e=>e.stunTimer=Math.max(e.stunTimer??0,.65));
-        if (runtime.noiseCount >= 5) {runtime.noiseActive=false;runtime.enemies.filter(e=>e.kind==="noise"&&e.alive).forEach(removeEnemy);notify("5/5 SPECIMENS · NOISE SILENCED");}
-        else notify(`NOISE SPECIMEN ${runtime.noiseCount}/5`);
+        collectNoiseSpecimen();
       } else if(pickup.kind==="jar"){
         runtime.paradoxJar=true;runtime.paradoxJarEquipped=true;
         notify("ESSENCE JAR ACQUIRED · EQUIPPED · JUMP INTO A WHIRLPOOL");
@@ -2181,6 +2191,12 @@ export default function IonGame() {
       } else if (pickup.kind === "ammo") { runtime.ammo = Math.min(runtime.maxAmmo, runtime.ammo + 3); notify("3 ROUNDS RECOVERED"); }
       else if (pickup.kind === "battery") { runtime.battery = Math.min(100, runtime.battery + 32); notify("BATTERY CELL +32%"); }
       refreshObjective(); updateHud(true);
+    }
+    function collectNoiseSpecimen(){
+      badge("specimen");runtime.noiseCount+=1;
+      runtime.enemies.filter(e=>e.kind==="blob"||e.kind==="remetons").forEach(e=>e.stunTimer=Math.max(e.stunTimer??0,.65));
+      if(runtime.noiseCount>=5){runtime.noiseActive=false;runtime.enemies.filter(e=>e.kind==="noise"&&e.alive).forEach(removeEnemy);notify("5/5 SPECIMENS · NOISE SILENCED");}
+      else notify(`NOISE SPECIMEN ${runtime.noiseCount}/5`);
     }
     function refreshObjective() {
       if(runtime.resonatorWorld){runtime.doorUnlocked=runtime.noiseCount>=5;runtime.objective=runtime.doorUnlocked?"RESONATOR · EXIT GATE OPEN":`RESONATOR · SPECIMENS ${runtime.noiseCount}/5 · SURVIVE THE CONVERGENCE`;if(runtime.doorUnlocked)runtime.doorOpening=true;updateDoorIndicator();return;}
@@ -2274,7 +2290,18 @@ export default function IonGame() {
         const found:string[]=[];
         for(const [key,count] of Object.entries(loot)){if(count){runtime.inventory[key as ItemKey]+=count;found.push(ITEMS[key as ItemKey].label);}}
         if(loot.goldBar){badge("paradox","ascended");if(runtime.paradoxWorld)badge("paradox","ascendidox");}
+        if(runtime.noiseActive && runtime.stations.some(s=>s.kind==="noiseCore")){
+          collectNoiseSpecimen();found.push("Noise Capsule");refreshObjective();
+        }
         notify(found.length?`CABINET · ${found.join(" · ").toUpperCase()}`:"CABINET EMPTY");updateHud(true);return;
+      }
+      if(kind==="noiseCore"){
+        if(!station||station.activated||!runtime.noiseActive)return;
+        const crystal=(["quartz","obsidian","citrine"] as CrystalKey[]).find(key=>runtime.crystals[key]>0);
+        if(!crystal){notify("NOISE DEMANDS QUARTZ, OBSIDIAN OR CITRINE · SEARCH THE ROOM");return;}
+        runtime.crystals[crystal]--;station.activated=true;collectNoiseSpecimen();
+        notify(`${CRYSTALS[crystal].label.toUpperCase()} SACRIFICED · CAPSULE RELEASED`);
+        refreshObjective();updateHud(true);return;
       }
       if(kind==="rift"){
         if(!runtime.stations.some(s=>s.kind==="rift")){notify("NO RIFT IN THIS ROOM");return;}
@@ -2319,6 +2346,7 @@ export default function IonGame() {
           badge("resonator");
           if(runtime.chaseRoom)runtime.enemies.filter(e=>e.kind==="blob"||e.kind==="remetons").forEach(e=>e.stunTimer=1.8);
           station.object.traverse((child) => { if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) child.material.emissive?.set(0x37ffb2); });
+          if(station.object.userData.sealedResonator){station.object.clear();station.object.add(createStation("resonator",0x37ffb2));}
           runtime.audio?.pulse("pickup");
           if (runtime.haidIniActive && runtime.activeResonators >= 30) {
             runtime.enemies.filter((enemy) => enemy.kind === "haidini" && enemy.alive).forEach(removeEnemy);
@@ -2482,14 +2510,14 @@ export default function IonGame() {
       runtime.pickups.forEach((pickup, index) => {
         if (!pickup.object.visible) return; const distance = pickup.object.position.distanceTo(runtime.player);
         if (distance < bestDistance) { bestDistance = distance; runtime.nearest = { kind: "pickup", index };
-          runtime.prompt = pickup.kind === "neonBadge" ? "E  CLAIM THE FLOATING *+* BADGE" : pickup.kind === "gold" ? "E  TAKE GOLD BAR · ENTER ASCENDED" : pickup.kind === "jar" ? "E  TAKE ESSENCE JAR" : pickup.kind === "crystal" && pickup.crystal ? `E  COLLECT ${CRYSTALS[pickup.crystal].label.toUpperCase()}` : `E  TAKE ${pickup.kind.toUpperCase()}`; }
+          runtime.prompt = pickup.object.userData.sealedCapsule ? "E  BREAK CRYSTAL · EXTRACT NOISE CAPSULE" : pickup.kind === "neonBadge" ? "E  CLAIM THE FLOATING *+* BADGE" : pickup.kind === "gold" ? "E  TAKE GOLD BAR · ENTER ASCENDED" : pickup.kind === "jar" ? "E  TAKE ESSENCE JAR" : pickup.kind === "crystal" && pickup.crystal ? `E  COLLECT ${CRYSTALS[pickup.crystal].label.toUpperCase()}` : `E  TAKE ${pickup.kind.toUpperCase()}`; }
       });
       runtime.stations.forEach((station, index) => {
         const distance = station.object.position.distanceTo(runtime.player);
-        if (distance < bestDistance && !(station.activated && (station.kind === "resonator" || station.kind === "cabinet"))) { bestDistance = distance; runtime.nearest = { kind: "station", index };
-          runtime.prompt = station.kind === "lore" ? "E  OFFER VIAL OF SÁNG TO LORE" : station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
+        if (distance < bestDistance && !(station.activated && (station.kind === "resonator" || station.kind === "cabinet" || station.kind === "noiseCore"))) { bestDistance = distance; runtime.nearest = { kind: "station", index };
+          runtime.prompt = station.kind === "noiseCore" ? "E  SACRIFICE QUARTZ / OBSIDIAN / CITRINE FOR CAPSULE" : station.kind === "lore" ? "E  OFFER VIAL OF SÁNG TO LORE" : station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
             : station.kind === "trapdoor" ? runtime.chaseRoom ? "TRAPDOOR JAMMED · KEEP RUNNING" : runtime.haidIniActive ? runtime.hiding ? "E  EXIT · HAID-INI CAN ENTER" : "E  HIDE · UNSAFE FROM HAID-INI" : runtime.hiding ? "E  EXIT TRAPDOOR" : "E  HIDE IN TRAPDOOR"
-            : station.kind === "resonator" ? station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  TUNE · RESONATION SHIELD REQUIRED" : "E  TUNE RESONATOR"
+            : station.kind === "resonator" ? station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  EXTRACT · RESONATION SHIELD REQUIRED" : "E  BREAK CRYSTAL · TUNE HIDDEN RESONATOR"
             : `E  USE ${station.kind.replace("infusionsmith", "INFUSIONSMITH").toUpperCase()}`; }
       });
       if (runtime.door) {
