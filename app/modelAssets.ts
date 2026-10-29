@@ -55,7 +55,7 @@ export class ModelAssets {
         let model: Pick<GLTF,"scene"|"animations">;
         if(mineral){
           const geometry=await stlLoader.loadAsync(url);
-          const group=new THREE.Group();group.add(new THREE.Mesh(geometry,new THREE.MeshPhysicalMaterial({color:0xffffff,roughness:.2,metalness:.06,clearcoat:1,clearcoatRoughness:.12,ior:1.54})));
+          const group=new THREE.Group();group.add(new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0xffffff,roughness:.2,metalness:.18})));
           model={scene:group,animations:[]};
         }else model=await loader.loadAsync(url);
         const processed = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
@@ -91,17 +91,16 @@ export class ModelAssets {
       if (!(node instanceof THREE.Mesh)) return;
       node.geometry = node.geometry.clone();
       const copy = (source: THREE.Material) => {
-        const material = source.clone() as THREE.MeshPhysicalMaterial;
+        const material = source.clone() as THREE.MeshStandardMaterial;
         const mineral=key.startsWith("mineral_");
         if (material.color && options.tint !== undefined) {
           material.map = null;
           material.color.setHex(0xffffff);
           const low = new THREE.Color(options.tint).multiplyScalar(0.38).getHex();
           const high = new THREE.Color(options.tint).lerp(new THREE.Color(0x8ccfff),0.22).getHex();
-          if(mineral)material.color.setHex(options.tint);else applyGradient(material,low,high);
-          material.roughness = mineral ? (key==="mineral_malachite"?.38:.16) : .45;
-          material.metalness = mineral ? (key==="mineral_obsidian"?.28:.04) : .36;
-          if(mineral){material.clearcoat=1;material.ior=1.54;material.transmission=key==="mineral_quartz"?.16:.02;material.thickness=.4;}
+          applyGradient(material,low,high);
+          material.roughness = mineral ? .2 : .38;
+          material.metalness = .18;
         }
         if (material.emissive && options.emissive !== undefined) {
           material.emissive.setHex(options.tint ?? 0x57cfc3);
