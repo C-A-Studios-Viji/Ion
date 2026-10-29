@@ -39,12 +39,12 @@ function gameHarness(authorized=true){
   return {runtime,act,step,enter,useAt,load,saved,listeners,screen:()=>refs[3].current,setRandom:value=>{randomRoll=value;}};
 }
 
-test('two Fluorite per Infusionsmith batch, up to four rarer crawlers, 816 persistent badges and three save slots',async()=>{
+test('two Fluorite per Infusionsmith batch, up to four rarer crawlers, 250 persistent badges and three save slots',async()=>{
   const h=gameHarness();await Promise.resolve();await Promise.resolve();
   const progression=h.load(path.join(root,'app/progression.ts'));
-  assert.equal(progression.BADGES.length,816);
-  assert.equal(new Set(progression.BADGES.map(b=>b.id)).size,816);
-  assert.equal(progression.TUTORIALLESS_BADGE_COUNT,327);
+  assert.equal(progression.BADGES.length,250);
+  assert.equal(new Set(progression.BADGES.map(b=>b.id)).size,250);
+  assert.equal(progression.TUTORIALLESS_BADGE_COUNT,100);
   const allRolls=(...values)=>{let i=0;return()=>values[i++]};
   assert.equal(progression.rollCrawlerPack(allRolls(.99),0),0);
   assert.equal(progression.rollCrawlerPack(allRolls(0,.99),0),1);
@@ -199,7 +199,7 @@ test('Pers tear, prime-door Gold, Ascendidox and the 20-door shortcut are playab
   progress=JSON.parse(h.saved.get('ion-badges-v1'));assert(progress.unlocked.includes('paradox-conqueror'));
   const catalog=h.load(path.join(root,'app/progression.ts')).BADGES;
   const progression=h.load(path.join(root,'app/progression.ts'));
-  assert.equal(catalog.length,816);assert.equal(catalog.find(b=>b.id==='ascendidox').tutorial,undefined);
+  assert.equal(catalog.length,250);assert.equal(catalog.find(b=>b.id==='ascendidox').tutorial,undefined);
   assert.equal(catalog.find(b=>b.id==='ascendidox').rarity,'xtraultra');
   const codeProgress=progression.emptyBadgeProgress();
   assert(progression.awardBadges(codeProgress,'multiplayer','triple-code').some(b=>b.id==='triple-signal'));
@@ -237,7 +237,7 @@ test('legacy codes cannot grant badges and permission gates direct selection',as
  assert(JSON.parse(authorized.saved.get('ion-badges-v1')).unlocked.includes('win'));
  const p=h.load(path.join(root,'app/progression.ts'));
  assert.equal(p.badgeFromCode,undefined);assert.equal(p.badgeCode,undefined);
- assert.equal(p.BADGES.filter(b=>b.event==='boon').length,690);
+ assert.equal(p.BADGES.filter(b=>b.event==='boon').length,115);
 });
 
 test('Pers Hub guarantees Citrine and Obsidian specimens',async()=>{
@@ -371,4 +371,84 @@ test('LORE route offers the blood vial, saves ReDox, reaches Ascended 50, reveal
  r.enemies.forEach(e=>e.alive=false);r.noiseActive=false;r.noiseCount=5;r.doorUnlocked=true;r.nearest={kind:'door'};h.act.interact();r.transition=.01;h.step(.1);
  assert.equal(r.loreRoute.phase,'complete');assert(JSON.parse(h.saved.get('ion-badges-v1')).unlocked.includes('ten-souls-one-heartbeat'));
  assert.equal(p.BADGES.find(b=>b.id==='ten-souls-one-heartbeat').rarity,'plus');
+});
+
+
+test('all room layouts are reachable, deterministic and respect special-room reservations',()=>{
+ const h=gameHarness(),types=h.load(path.join(root,'app/roomTypes.ts'));
+ const seen=new Set();
+ for(let room=5;room<200;room++){
+  const type=types.roomTypeFor(room);seen.add(type);
+  assert.equal(types.roomTypeFor(room,true),'standard');
+  assert.equal(types.roomTypeFor(room),type);
+ }
+ types.ROOM_TYPES.forEach(type=>assert(seen.has(type)));
+ for(const type of ['duplex','multifloor','basement','collapsed']){
+  const p=types.floorProfile(type,44);assert.equal(p[0][1],0);assert.equal(p.at(-1)[1],0);
+  for(let z=-22;z<22;z+=.1)assert(Math.abs(types.roomFloor(type,44,z+.1)-types.roomFloor(type,44,z))<.2);
+ }
+ for(const type of types.ROOM_TYPES){
+  const room=Array.from({length:190},(_,i)=>i+5).find(r=>types.roomTypeFor(r)===type&&r%25!==0);
+  h.enter(room);assert.equal(h.runtime.layout,type);
+  assert(h.runtime.stations.some(s=>s.kind==='cabinet'));
+  h.runtime.pickups.forEach(p=>assert(Number.isFinite(p.object.position.y)));
+ }
+});
+
+test('INVERSION reverses keys, seals anchors against keys, resumes and awards Ultra only on escape',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(17);const r=h.runtime;
+ assert.equal(r.layout,'inversion');assert.equal(r.requiredResonators,3);assert.equal(r.noiseActive,false);
+ const z=r.player.z;r.keysDown.add('KeyW');h.step(.3);r.keysDown.clear();assert(r.player.z>z);
+ const z2=r.player.z;r.keysDown.add('KeyS');h.step(.3);r.keysDown.clear();assert(r.player.z<z2);
+ r.player.set(0,1.65,-r.roomLength/2+1.5);h.step();h.act.interact();assert.equal(r.doorOpening,false);
+ const anchors=r.stations.filter(s=>s.kind==='resonator');assert.equal(anchors.length,3);
+ anchors.forEach(s=>h.useAt(s.object));assert.equal(r.activeResonators,3);assert.equal(r.doorUnlocked,true);
+ h.act.saveRun();const save=JSON.parse(h.saved.get('ion-saves-v1'))[0].state;
+ assert(Number.isFinite(save.inversionTime));h.act.loadSlot(0);h.act.confirmBoons();assert.equal(r.activeResonators,3);assert.equal(r.layout,'inversion');
+ const badge=h.load(path.join(root,'app/progression.ts')).BADGES.find(b=>b.id==='layout-inversion');assert.equal(badge.rarity,'ultra');
+ r.inversionActor.position.set(0,0,20);r.doorProgress=1;r.player.set(0,1.65,-r.roomLength/2-1);h.step(2);
+ const progress=JSON.parse(h.saved.get('ion-badges-v1'));assert(progress.unlocked.includes('layout-inversion'));
+});
+
+test('badge migration preserves retired awards and reduces display to 250 unique records',()=>{
+ const h=gameHarness(),p=h.load(path.join(root,'app/progression.ts'));
+ const trial=p.BADGES.find(b=>b.id.startsWith('boon-')&&b.id.endsWith('-5'));
+ const old=trial.id.replace(/-5$/,'-25');
+ const result=p.migrateBadgeProgress({unlocked:['room-2',old,'room-2'],counts:{room:12},detailCounts:{}});
+ assert.equal(result.unlocked.length,2);assert(result.unlocked.includes(trial.id));assert(result.retiredUnlocked.includes(old));assert.equal(result.counts.room,12);
+ assert.equal(p.BADGES.length,250);assert.equal(p.TUTORIALLESS_BADGE_COUNT,100);
+});
+
+
+test('terraced floors support walking and INVERSION strikes respect cover',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();
+ const types=h.load(path.join(root,'app/roomTypes.ts'));
+ for(const type of ['duplex','multifloor','basement','collapsed']){
+  const room=Array.from({length:180},(_,i)=>i+5).find(r=>types.roomTypeFor(r)===type);
+  h.enter(room);const r=h.runtime;r.enemies=[];r.hazards=[];r.noiseActive=false;r.grinIncoming=false;
+  r.keysDown.add('KeyW');let high=-99,low=99;
+  for(let i=0;i<240;i++){h.step(.05);high=Math.max(high,r.player.y);low=Math.min(low,r.player.y);assert(Math.abs(r.player.y-1.65-types.roomFloor(type,r.roomLength,r.player.z))<.65);}
+  r.keysDown.clear();assert(high-low>1.5);
+ }
+ h.enter(17);h.runtime.player.set(0,1.65,15);h.runtime.spawnGrace=0;h.runtime.inversionTime=7.95;h.step(.1);assert.equal(h.runtime.dead,true);
+ h.enter(17);h.runtime.player.set(3,1.65,11);h.runtime.spawnGrace=0;h.runtime.inversionTime=7.95;h.step(.1);assert.equal(h.runtime.dead,false);
+});
+
+test('room geometry has a traversable route to the exit and each required objective',()=>{
+ const h=gameHarness(),types=h.load(path.join(root,'app/roomTypes.ts'));
+ for(const type of types.ROOM_TYPES){
+  const room=Array.from({length:190},(_,i)=>i+5).find(r=>types.roomTypeFor(r)===type);h.enter(room);const r=h.runtime;
+  const spacing=.5,w=Math.floor((r.roomWidth-1.5)/spacing),l=Math.floor((r.roomLength-1.5)/spacing);
+  const position=(x,z)=>new THREE.Vector3(-r.roomWidth/2+.75+x*spacing,1.2+types.roomFloor(type,r.roomLength,-r.roomLength/2+.75+z*spacing),-r.roomLength/2+.75+z*spacing);
+  const start=[Math.round((r.player.x+r.roomWidth/2-.75)/spacing),Math.round((r.player.z+r.roomLength/2-.75)/spacing)];
+  const seen=new Set(),queue=[start],reachable=[];
+  for(let i=0;i<queue.length;i++){
+   const [x,z]=queue[i],id=x+':'+z;if(x<0||z<0||x>w||z>l||seen.has(id))continue;seen.add(id);
+   const p=position(x,z),box=new THREE.Box3().setFromCenterAndSize(p,new THREE.Vector3(.68,1.5,.68));if(r.obstacles.some(b=>b.intersectsBox(box)))continue;
+   reachable.push(p);queue.push([x+1,z],[x-1,z],[x,z+1],[x,z-1]);
+  }
+  assert(reachable.some(p=>Math.abs(p.x)<1&&p.z< -r.roomLength/2+2),type+' exit blocked');
+  const objectives=[...r.pickups.filter(p=>p.mandatory||p.kind==='specimen').map(p=>p.object),...r.stations.filter(s=>s.kind==='resonator'||s.kind==='noiseCore'||s.kind==='cabinet').map(s=>s.object)];
+  for(const object of objectives)assert(reachable.some(p=>p.distanceTo(object.position)<2.25),type+' objective blocked at '+object.position.toArray());
+ }
 });

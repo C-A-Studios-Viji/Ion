@@ -17,7 +17,7 @@ repository path as well as a custom domain.
 Open **Saved runs** from the main menu to start or resume one of three local
 save slots. Each room entry is saved automatically; the pause menu also offers
 a manual save for crystals, inventory, tuned resonators and collected specimens.
-Saves and the 100 badge records remain in that browser's storage. Clearing site
+Saves and the 250 badge records remain in that browser's storage. Clearing site
 data removes them, and they do not follow an account to another device.
 
 Open **Play with a friend** to host a two-player room and share the five-digit
@@ -176,3 +176,11 @@ The timeout defaults can be overridden for a controlled canary with `SITES_INSTA
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
 - [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+
+## Variable rooms
+
+Ordinary doors can lead to Grand Chambers, Duplexes, Multi-floor Facilities, Basements, Crystal Mazes, Collapsed Rooms, Flooded Chambers, Observation Rooms or INVERSION. Ramps connect elevated floors, maze gaps have glowing route markers, and flooded areas slow movement outside walkways. Special chase, Hub and dimension rooms retain their dedicated courses.
+
+INVERSION swaps W/S and A/D (including touch movement). Purple light warns of Pers’s strike: hide behind a cabinet or in a trapdoor. Break three crystal anchors to release the exit, then escape his pursuit to qualify for the Ultra badge “Wrong Way Home.” Existing daily badge permission still applies.
+
+The archive contains exactly 250 badges, with 100 tutorials hidden. Retired Boon trials are preserved in browser save history; retained badges and counters carry forward.
