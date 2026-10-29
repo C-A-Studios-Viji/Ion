@@ -5,6 +5,7 @@ export default defineConfig({
   root: "pages",
   base: "./",
   plugins: [react()],
+  assetsInclude: ["**/*.stl"],
   build: {
     outDir: "../dist-pages",
     emptyOutDir: true,

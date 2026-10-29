@@ -51,3 +51,22 @@ Packaging changes: renamed files, embedded external textures, converted self-con
 The custom Grin, Blob, Haid-Ini and Noble Pers remain ION's procedural designs; they have not been replaced with unrelated stock characters. Synthesized Fluorite retains its cubic shape. Blood decals, lights, whirlpool effects, collision geometry and parkour courses remain procedural.
 
 Models are approximately 2.3 MiB total before HTTP compression. `app/modelAssets.ts` owns loading, normalization, cloning and disposal. Start waits for loading to settle, and individual failed downloads use the existing procedural fallback.
+
+## CRYSTALLINE visual revamp — 29 October 2026
+
+Seven fresh crystal meshes replace the earlier Space Kit mineral models.
+[LowPoly Crystals Pack by iPoly3D](https://opengameart.org/content/lowpoly-crystals-pack)
+is marked **CC0** by its author. ION uses the original pack's STL meshes, axis
+converted, grounded and scaled with `scripts/import-crystals.mjs`. They remain
+bundled ASCII STL assets and load with Three.js STLLoader. The full model mapping
+and source archive URL are recorded in `app/assets/minerals/SOURCE.md`.
+
+Each mineral has a different mesh, with materials applied in the game: faceted
+clearcoat, mineral colours, restrained emission and quartz transmission. These
+are stylized mineral props; they are not scientific mineral reconstructions.
+
+The CRYSTALLINE room panels, ceiling pipes, physical seven-segment door numbers,
+path lights, surface textures, dust and redesigned interface are original ION
+code. The environmental reflections use Three.js RoomEnvironment under the same
+MIT licence as the installed Three.js dependency; no external HDR download is
+required. All assets needed by gameplay are bundled, with procedural fallbacks.

@@ -184,3 +184,12 @@ Ordinary doors can lead to Grand Chambers, Duplexes, Multi-floor Facilities, Bas
 INVERSION swaps W/S and A/D (including touch movement). Purple light warns of Pers’s strike: hide behind a cabinet or in a trapdoor. Break three crystal anchors to release the exit, then escape his pursuit to qualify for the Ultra badge “Wrong Way Home.” Existing daily badge permission still applies.
 
 The archive contains exactly 250 badges, with 100 tutorials hidden. Retired Boon trials are preserved in browser save history; retained badges and counters carry forward.
+
+## CRYSTALLINE visual edition
+
+The visual refresh bundles seven distinct CC0 STL mineral meshes and adds
+faceted physical materials, studio reflections, industrial surface textures,
+wall panels, pipes, door-number displays and path lighting. The Home screen,
+HUD, inventory, saves and badge screens share a slate/amber field-instrument
+style. All established room types, routes and progression rules remain active.
+See ASSET_CREDITS.md and app/assets/minerals/SOURCE.md for the exact asset origins.

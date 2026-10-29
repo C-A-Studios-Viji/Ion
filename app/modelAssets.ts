@@ -1,12 +1,18 @@
 import * as THREE from "three";
+import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
 import { roundStaticGeometry, smoothNormals, applyGradient } from "./surfaceStyle";
 
 // Literal URLs let Vite package every model under the GitHub Pages base path.
 export const MODEL_URLS = {
-  crystals: new URL("./assets/crystals.glb", import.meta.url).href,
-  crystalSmall: new URL("./assets/crystal-small.glb", import.meta.url).href,
+  mineral_malachite: new URL("./assets/minerals/malachite.stl", import.meta.url).href,
+  mineral_amethyst: new URL("./assets/minerals/amethyst.stl", import.meta.url).href,
+  mineral_quartz: new URL("./assets/minerals/quartz.stl", import.meta.url).href,
+  mineral_obsidian: new URL("./assets/minerals/obsidian.stl", import.meta.url).href,
+  mineral_citrine: new URL("./assets/minerals/citrine.stl", import.meta.url).href,
+  mineral_fluorite: new URL("./assets/minerals/fluorite.stl", import.meta.url).href,
+  mineral_corrupted: new URL("./assets/minerals/corrupted.stl", import.meta.url).href,
   rock: new URL("./assets/rock.glb", import.meta.url).href,
   rockWide: new URL("./assets/rock-wide.glb", import.meta.url).href,
   generator: new URL("./assets/generator.glb", import.meta.url).href,
@@ -35,25 +41,32 @@ type Options = {
 };
 
 export class ModelAssets {
-  private models = new Map<ModelKey, GLTF>();
+  private models = new Map<ModelKey, Pick<GLTF,"scene"|"animations">>();
   private disposed = false;
 
   async load(onProgress: (loaded: number, total: number) => void) {
     const loader = new GLTFLoader();
+    const stlLoader = new STLLoader();
     const entries = Object.entries(MODEL_URLS) as [ModelKey, string][];
     let loaded = 0;
     await Promise.all(entries.map(async ([key, url]) => {
       try {
-        const model = await loader.loadAsync(url);
+        const mineral=key.startsWith('mineral_');
+        let model: Pick<GLTF,"scene"|"animations">;
+        if(mineral){
+          const geometry=await stlLoader.loadAsync(url);
+          const group=new THREE.Group();group.add(new THREE.Mesh(geometry,new THREE.MeshPhysicalMaterial({color:0xffffff,roughness:.2,metalness:.06,clearcoat:1,clearcoatRoughness:.12,ior:1.54})));
+          model={scene:group,animations:[]};
+        }else model=await loader.loadAsync(url);
         const processed = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
         model.scene.traverse(node => {
           if (!(node instanceof THREE.Mesh)) return;
           const original = node.geometry;
           let rounded = processed.get(original);
           if (!rounded) {
-            const baked: THREE.BufferGeometry = node instanceof THREE.SkinnedMesh || key === "crystals" || key === "crystalSmall"
+            const baked: THREE.BufferGeometry = node instanceof THREE.SkinnedMesh || mineral
               ? original.clone() : roundStaticGeometry(original);
-            smoothNormals(baked); processed.set(original, baked); rounded = baked;
+            if(!mineral)smoothNormals(baked); processed.set(original, baked); rounded = baked;
           }
           node.geometry = rounded;
         });
@@ -78,15 +91,17 @@ export class ModelAssets {
       if (!(node instanceof THREE.Mesh)) return;
       node.geometry = node.geometry.clone();
       const copy = (source: THREE.Material) => {
-        const material = source.clone() as THREE.MeshStandardMaterial;
+        const material = source.clone() as THREE.MeshPhysicalMaterial;
+        const mineral=key.startsWith("mineral_");
         if (material.color && options.tint !== undefined) {
           material.map = null;
           material.color.setHex(0xffffff);
           const low = new THREE.Color(options.tint).multiplyScalar(0.38).getHex();
           const high = new THREE.Color(options.tint).lerp(new THREE.Color(0x8ccfff),0.22).getHex();
-          applyGradient(material,low,high);
-          material.roughness = key === "crystals" || key === "crystalSmall" ? 0.2 : 0.38;
-          material.metalness = 0.18;
+          if(mineral)material.color.setHex(options.tint);else applyGradient(material,low,high);
+          material.roughness = mineral ? (key==="mineral_malachite"?.38:.16) : .45;
+          material.metalness = mineral ? (key==="mineral_obsidian"?.28:.04) : .36;
+          if(mineral){material.clearcoat=1;material.ior=1.54;material.transmission=key==="mineral_quartz"?.16:.02;material.thickness=.4;}
         }
         if (material.emissive && options.emissive !== undefined) {
           material.emissive.setHex(options.tint ?? 0x57cfc3);
@@ -134,7 +149,7 @@ export function disposeModel(root: THREE.Object3D, textures = false) {
   root.traverse((node) => {
     const mixer = node.userData.assetMixer as THREE.AnimationMixer | undefined;
     if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(mixer.getRoot()); }
-    if (!(node instanceof THREE.Mesh)) return;
+    if (!(node instanceof THREE.Mesh || node instanceof THREE.Points || node instanceof THREE.Line)) return;
     node.geometry.dispose();
     if (node instanceof THREE.SkinnedMesh) node.skeleton.dispose();
     (Array.isArray(node.material) ? node.material : [node.material]).forEach((material) => {
