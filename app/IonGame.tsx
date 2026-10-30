@@ -10,7 +10,7 @@ import { gradientMaterial, smoothNormals } from "./surfaceStyle";
 import { HorrorAudio } from "./horrorAudio";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { BADGES, migrateBadgeProgress, awardBadges, emptyBadgeProgress, readRunSlots, writeRunSlot, rollCrawlerPack, type BadgeEvent, type BadgeProgress, type RunSlot } from "./progression";
-import { PartyLink, hasTripleDigit, validPartyCode, type PartyMessage, type Pose } from "./multiplayer";
+import { PartyLink, hasTripleDigit, validPartyCode, parsePartyInvite, partyInviteUrl, type PartyMessage, type Pose } from "./multiplayer";
 import { goldBarSpawns, paradoxEncounter, isPrimeDoor } from "./paradox";
 
 import { BOONS, negativeBoons, candyOutcome, boonDoorStep, type BoonId } from "./boons";
@@ -19,6 +19,9 @@ import { emptyEntityEvents, createMemoryTrial, payVoid, type EntityEvents } from
 import { roomTypeFor, roomFloor, mazeBarriers, ROOM_LABELS, type RoomType } from './roomTypes';
 import { buildRoomGeometry } from './roomGeometry';
 import { permissionDay, verifyPermission } from "./badgePermission";
+
+import { miningHits, SANG_SKIP_COST, GLUE_CHANCE, MAX_PICKAXE_LEVEL, canRepairJar, sangSkipTarget } from "./mining";
+import { createPlayerModel, createPickaxe, animatePlayer, cleanAppearance, DEFAULT_APPEARANCE, type Appearance } from "./playerModel";
 
 type CrystalKey =
   | "malachite"
@@ -29,10 +32,11 @@ type CrystalKey =
   | "fluorite"
   | "corrupted";
 
-type ItemKey = "bottle" | "sang" | "pearl" | "goldBar" | "resonationShield" | "soul" | "royalBattery" | "obsidianMagazine" | "citrineRush" | "persKey" | "crystalWard";
+type ItemKey = "glassShard" | "glue" | "bottle" | "sang" | "pearl" | "goldBar" | "resonationShield" | "soul" | "royalBattery" | "obsidianMagazine" | "citrineRush" | "persKey" | "crystalWard";
 type EnemyKind = MonsterKind;
 
 type Screen =
+  | "customize"
   | "start"
   | "tutorial"
   | "pause"
@@ -66,6 +70,8 @@ type HudState = {
   noiseCount: number;
   noiseTime: number;
   chaseStage: number;
+  pickaxeLevel:number;
+  thirdPerson:boolean;
   resonatorsTuned: number;
   resonatorsRequired: number;
   infectionCaption: string;
@@ -118,7 +124,7 @@ type HudState = {
 
 type Pickup = {
   object: THREE.Group;
-  kind: "crystal" | "ammo" | "battery" | "specimen" | "jar" | "gold" | "neonBadge" | "candy";
+  kind: "crystal" | "ammo" | "battery" | "specimen" | "jar" | "gold" | "neonBadge" | "candy" | "glassShard" | "glue";
   crystal?: CrystalKey;
   mandatory?: boolean;
 };
@@ -152,6 +158,12 @@ type Hazard = {
 };
 
 type Runtime = {
+  pickaxeLevel:number;
+  mineSwing:number;
+  thirdPerson:boolean;
+  localAvatar:THREE.Group;
+  pickaxeModel:THREE.Group;
+  appearance:Appearance;
   layout: RoomType;
   inversionTime: number;
   inversionActor: THREE.Group | null;
@@ -285,6 +297,8 @@ type Runtime = {
 };
 
 type SaveData = {
+  pickaxeLevel?:number;
+  miningProgress?:Record<string,number>;
   inversionTime?: number;
   loreRoute?:LoreRoute;
   encounters?: EntityEvents;
@@ -353,6 +367,10 @@ type ActionApi = {
   buyBasdino: () => void;
   openInventory: () => void;
   useItem: (key: ItemKey) => void;
+  toggleView: () => void;
+  upgradePickaxe: () => void;
+  repairJar: () => void;
+  customize: (appearance:Appearance) => void;
   toggleJar: () => void;
   exploreExtraction: () => void;
   banish: (kind: EnemyKind) => void;
@@ -396,13 +414,15 @@ const CRYSTAL_KEYS: CrystalKey[] = [
 const FOUND_CRYSTAL_KEYS: CrystalKey[] = CRYSTAL_KEYS.filter((key) => key !== "fluorite");
 
 const EMPTY_INVENTORY = (): Record<ItemKey, number> => ({
-  bottle: 0, sang: 0, pearl: 0, goldBar: 0, resonationShield: 0,
+  glassShard:0, glue:0, bottle: 0, sang: 0, pearl: 0, goldBar: 0, resonationShield: 0,
   soul: 0, royalBattery: 0, obsidianMagazine: 0, citrineRush: 0, persKey: 0, crystalWard: 0,
 });
 
 const ITEMS: Record<ItemKey, { label: string; note: string; color: string }> = {
-  bottle: { label: "Empty Bottle", note: "Only found in storage cabinets (4%). Use beside a floor blood pool to scoop a Vial of Sáng.", color: "#9ccfff" },
-  sang: { label: "Vial of Sáng", note: "Consume to skip 50 doors in your current dimension. Ascended ends at Door 20.", color: "#ff3355" },
+  glassShard:{label:"Jar Shard",note:"Found at every Ascended door. Combine one shard with one Glue to repair an empty jar.",color:"#9cded3"},
+  glue:{label:"Glue",note:"Rare cabinet find (4%, the same chance as an empty bottle). Repairs a jar shard.",color:"#e5bd79"},
+  bottle: { label: "Empty Bottle", note: "Find in cabinets (4%), or repair one Jar Shard with Glue. Use beside a blood pool to scoop a Vial of Sáng.", color: "#9ccfff" },
+  sang: { label: "Vial of Sáng", note: "Consume FOUR vials to skip 50 doors, capped at the current route’s end. One vial can instead upgrade your pickaxe.", color: "#ff3355" },
   pearl: { label: "Pearl", note: "Crush to restore 25 flashlight battery.", color: "#eeeaff" },
   goldBar: { label: "Gold Bar", note: "Use to enter Ascended. Finding one in Paradox grants Ascendidox.", color: "#ffd477" },
   resonationShield: { label: "Resonation Shield", note: "Reusable protection required to tune shielded resonators. Keep it in your inventory.", color: "#7affd6" },
@@ -593,7 +613,7 @@ const TUTORIAL_STEPS = [
 
 const INITIAL_HUD: HudState = {
   noiseActive: false, noiseCount: 0, noiseTime: 0, chaseStage: 0,
-  resonatorsTuned: 0, resonatorsRequired: 0, infectionCaption: "", deathKind: "entity",
+  pickaxeLevel:0,thirdPerson:false, resonatorsTuned: 0, resonatorsRequired: 0, infectionCaption: "", deathKind: "entity",
   room: 1,
   roomName: "Intake Corridor",
   tier: "CONTAINMENT",
@@ -797,6 +817,10 @@ export default function IonGame() {
   const badgesRef = useRef<BadgeProgress>(emptyBadgeProgress());
   const partyRef = useRef<PartyLink | null>(null);
   const badgeReturnRef = useRef<Screen>("start");
+  const [appearance,setAppearance]=useState<Appearance>(DEFAULT_APPEARANCE);
+  const [inviteLink,setInviteLink]=useState("");
+  const [inviteCopied,setInviteCopied]=useState(false);
+  const customizeReturn=useRef<Screen>("start");
 
   const showScreen = (value: Screen) => {
     screenRef.current = value;
@@ -857,11 +881,16 @@ export default function IonGame() {
     gunModel.position.set(0.43, -0.38, -0.72);
     gunModel.rotation.set(-0.05, -0.05, 0);
     camera.add(gunModel);
+    let appearance=DEFAULT_APPEARANCE;
+    try{appearance=cleanAppearance(JSON.parse(localStorage.getItem('ion-appearance-v1')??'null'));}catch{/* defaults */}
+    setAppearance(appearance);
+    const localAvatar=createPlayerModel(appearance);localAvatar.visible=false;scene.add(localAvatar);
+    const pickaxeModel=createPickaxe();pickaxeModel.position.set(.4,-.45,-.8);pickaxeModel.rotation.z=-.4;pickaxeModel.visible=false;camera.add(pickaxeModel);
     const runtime: Runtime = {
       chaseState: null, noiseActive: false, noiseCount: 0, noiseTime: 0, noisePulseTimer: 0,
       infectionTime: -1, infectionActors: null, deathKind: "entity", scareActor: null, scareTime: 0,
       layout: "standard", inversionTime: 0, inversionActor: null, inversionLight: null,
-      renderer, scene, camera, roomGroup, roomWidth: 17, roomLength: 25, roomHeight: 6,
+      pickaxeLevel:0,mineSwing:0,thirdPerson:false,localAvatar,pickaxeModel,appearance, renderer, scene, camera, roomGroup, roomWidth: 17, roomLength: 25, roomHeight: 6,
       room: 1, roomName: "Intake Corridor", tier: 0, player: new THREE.Vector3(0, 1.65, 8),
       verticalVelocity: 0, grounded: true,
       yaw: 0, pitch: 0, keysDown: new Set(), touchMove: { x: 0, y: 0, sprint: false }, lastTouchLook: null,
@@ -889,21 +918,16 @@ export default function IonGame() {
     runtimeRef.current = runtime;
     const party = new PartyLink();partyRef.current=party;
 
-    function localPose():Pose{return{x:runtime.player.x,y:runtime.player.y,z:runtime.player.z,yaw:runtime.yaw,light:runtime.flashlightOn,dead:runtime.dead,room:runtime.room,name:party.playerName};}
-    function remoteModel(){
-      const group=new THREE.Group();
-      const suit=new THREE.MeshStandardMaterial({color:0x213e65,emissive:0x092341,roughness:.4,metalness:.55});
-      const visor=new THREE.MeshStandardMaterial({color:0x4ef4e4,emissive:0x29bbdc,emissiveIntensity:1.4});
-      const body=new THREE.Mesh(new THREE.CapsuleGeometry(.29,.82,8,14),suit);body.position.y=-.72;group.add(body);
-      const helmet=new THREE.Mesh(new THREE.SphereGeometry(.27,20,14),visor);helmet.position.y=-.03;group.add(helmet);
-      const lamp=new THREE.PointLight(0x56e8ff,6,5);lamp.position.set(0,-.1,-.25);group.add(lamp);
-      group.userData.lamp=lamp;return group;
-    }
+    function localPose():Pose{return{x:runtime.player.x,y:runtime.player.y,z:runtime.player.z,yaw:runtime.yaw,light:runtime.flashlightOn,dead:runtime.dead,room:runtime.room,name:party.playerName,appearance:runtime.appearance};}
+    function remoteModel(){return createPlayerModel(cleanAppearance(runtime.remotePose?.appearance));}
     function updateRemoteAvatar(){
       const pose=runtime.remotePose;
       if(!pose || pose.room!==runtime.room)return;
       if(!runtime.remoteAvatar){runtime.remoteAvatar=remoteModel();runtime.roomGroup.add(runtime.remoteAvatar);}
+      const appearanceKey=JSON.stringify(cleanAppearance(pose.appearance));
+      if(runtime.remoteAvatar.userData.appearance!==appearanceKey){runtime.roomGroup.remove(runtime.remoteAvatar);disposeModel(runtime.remoteAvatar);runtime.remoteAvatar=remoteModel();runtime.roomGroup.add(runtime.remoteAvatar);}
       runtime.remoteAvatar.visible=true;
+      animatePlayer(runtime.remoteAvatar,performance.now()*.001,runtime.remoteAvatar.position.distanceTo(new THREE.Vector3(pose.x,pose.y,pose.z))>.03);
       runtime.remoteAvatar.userData.lamp.visible=pose.light && !pose.dead;
       runtime.remoteAvatar.position.lerp(new THREE.Vector3(pose.x,pose.y,pose.z),.33);
       runtime.remoteAvatar.rotation.y=pose.yaw;
@@ -912,11 +936,12 @@ export default function IonGame() {
     party.onStatus=status=>{setPartyStatus(status);updateHud(true);};
     party.onConnect=()=>{
       badge("multiplayer");
-      if(party.role==="host")party.send({type:"hello",state:snapshot(),pose:localPose()});
+      if(party.role==="guest")party.send({type:"ready"});
       updateHud(true);
     };
     party.onDisconnect=()=>{runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;updateHud(true);};
     party.onMessage=(message:PartyMessage)=>{
+      if(message.type==="ready"&&party.role==="host"){party.send({type:"hello",state:snapshot(),pose:localPose()});return;}
       if(message.type==="pose"){
         if(message.pose?.room>=1 && (message.pose.room<=400) && Number.isFinite(message.pose.x))runtime.remotePose=message.pose;
         return;
@@ -924,12 +949,12 @@ export default function IonGame() {
       if(message.type==="hello" && party.role==="guest"){
         const state=message.state as SaveData;
         if(!Number.isInteger(state?.room)||state.room<1||(state.room>200&&!(state.room===300&&state.resonatorWorld)&&!(state.room<=400&&state.loreRoute?.phase==='redox')&&!(state.room===201&&state.loreRoute?.phase==='reveal')))return;
-        runtime.remotePose=message.pose;runtime.dead=false;runtime.won=false;applySave(state);start(false);return;
+        runtime.remotePose=message.pose;runtime.dead=false;runtime.won=false;applySave(state);launchRun(false);return;
       }
       if(message.type==="room" && party.role==="guest"){
         const state=message.state as SaveData;
         if(!Number.isInteger(state?.room)||state.room<1||(state.room>200&&!(state.room===300&&state.resonatorWorld)&&!(state.room<=400&&state.loreRoute?.phase==='redox')&&!(state.room===201&&state.loreRoute?.phase==='reveal')))return;
-        runtime.dead=false;runtime.transition=0;applySave(state);start(false);return;
+        runtime.dead=false;runtime.transition=0;applySave(state);launchRun(false);return;
       }
       if(message.type==="request-room" && party.role==="host"){
         if(message.room===runtime.room+1 && (runtime.doorUnlocked||runtime.encounters.voidDebt)){runtime.transition=0;advanceDimension();}
@@ -1003,7 +1028,7 @@ export default function IonGame() {
       setHud({ room: runtime.room, roomName: `${runtime.roomName}${["duplex","multifloor","basement"].includes(runtime.layout)?` · ${runtime.player.y<.5?"B1":`F${Math.max(0,Math.round((runtime.player.y-1.65)/3))}`}`:""}`, tier: TIERS[runtime.tier] ?? "ION",
         noiseActive: runtime.noiseActive, noiseCount: runtime.noiseCount, noiseTime: runtime.noiseTime,
         chaseStage: runtime.chaseState ? runtime.room - runtime.chaseState.start + 1 : 0,
-        resonatorsTuned: runtime.activeResonators, resonatorsRequired: runtime.requiredResonators,
+        pickaxeLevel:runtime.pickaxeLevel,thirdPerson:runtime.thirdPerson,resonatorsTuned: runtime.activeResonators, resonatorsRequired: runtime.requiredResonators,
         infectionCaption: runtime.infectionTime < 0 ? "" : runtime.infectionTime < 2 ? "REMETONS · PERS IS NOT ALONE" : runtime.infectionTime < 4.5 ? "THE INFECTION IS SPREADING" : "PERS IS BECOMING THE BLOB · GET READY TO RUN",
         deathKind: runtime.deathKind,
         ammo: runtime.ammo, maxAmmo: runtime.maxAmmo, battery: runtime.battery, flashlightOn: runtime.flashlightOn,
@@ -1143,6 +1168,10 @@ export default function IonGame() {
           shard.castShadow = true; group.add(shard);
         }
       }
+      group.traverse(node=>{if(!(node instanceof THREE.Mesh))return;node.geometry.computeBoundingBox();const b=node.geometry.boundingBox!,pos=node.geometry.getAttribute('position'),colors=new Float32Array(pos.count*3);
+        for(let i=0;i<pos.count;i++){const t=(pos.getY(i)-b.min.y)/Math.max(.001,b.max.y-b.min.y);const c=t<.22?new THREE.Color(0x514b40):new THREE.Color(info.color).multiplyScalar(.45).lerp(new THREE.Color(info.color).lerp(new THREE.Color(0xf0e5ff),.5),Math.max(0,(t-.22)/.78));c.toArray(colors,i*3);}node.geometry.setAttribute('color',new THREE.BufferAttribute(colors,3));});
+      material.color.setHex(0xffffff);material.vertexColors=true;material.emissiveIntensity=.12;
+      const matrix=new THREE.Mesh(new THREE.IcosahedronGeometry(size*.43,1),new THREE.MeshStandardMaterial({color:0x514b40,roughness:.97}));matrix.scale.set(1,.36,1);matrix.position.y=.03;group.add(matrix);
       group.scale.setScalar(collectible ? 0.72 : 1);
       group.userData.crystal = key;
       return group;
@@ -1188,7 +1217,7 @@ export default function IonGame() {
       panel.position.set(0,1,.36);panel.userData.cabinetDoor=true;cabinet.add(panel);
       const handle=new THREE.Mesh(new THREE.TorusGeometry(.11,.025,8,20),new THREE.MeshStandardMaterial({color:0x66e8ff,emissive:0x125577}));handle.position.set(.42,1,.43);cabinet.add(handle);
       cabinet.position.set(-runtime.roomWidth/2+1,0,runtime.roomLength/2-5);cabinet.rotation.y=Math.PI/2;
-      cabinet.userData.loot={bottle:rand()<.04?1:0,pearl:rand()<.35?1:0,goldBar:rand()<.014?1:0,resonationShield:runtime.stations.some(s=>s.needsShield)?1:rand()<.16?1:0};
+      cabinet.userData.loot={bottle:rand()<.04?1:0,glue:rand()<GLUE_CHANCE?1:0,pearl:rand()<.35?1:0,goldBar:rand()<.014?1:0,resonationShield:runtime.stations.some(s=>s.needsShield)?1:rand()<.16?1:0};
       const index=runtime.stations.length;
       const opened=restore?.openedCabinets?.includes(index)??false;
       panel.visible=!opened;runtime.roomGroup.add(cabinet);runtime.stations.push({object:cabinet,kind:"cabinet",activated:opened});
@@ -1378,7 +1407,11 @@ export default function IonGame() {
 
     function makePickup(kind: Pickup["kind"], position: THREE.Vector3, crystal?: CrystalKey, mandatory = false) {
       let object: THREE.Group;
-      if(kind==="candy"){
+      if(kind==="glassShard"||kind==="glue"){
+        object=new THREE.Group();
+        const mat=new THREE.MeshStandardMaterial({color:kind==='glue'?0xe8bc62:0x9bddcf,metalness:.2,roughness:.2,emissive:0x17442e,emissiveIntensity:.3});
+        const mesh=new THREE.Mesh(kind==='glue'?new THREE.CylinderGeometry(.1,.12,.3,12):new THREE.TetrahedronGeometry(.26),mat);mesh.rotation.z=.5;object.add(mesh);
+      } else if(kind==="candy"){
         object=new THREE.Group();const sweet=new THREE.Mesh(new THREE.IcosahedronGeometry(.24,2),new THREE.MeshPhysicalMaterial({color:new THREE.Color().setHSL(Math.random(),.9,.65),metalness:.3,roughness:.15,emissive:0x552244,emissiveIntensity:1}));object.add(sweet);
       } else if (kind === "neonBadge") {
         object=new THREE.Group();
@@ -1623,6 +1656,7 @@ export default function IonGame() {
       }
     }
     function buildRoom(room: number, restore?: SaveData) {
+      runtime.mineSwing=0;
       const escapeKinds=[...new Set(runtime.enemies.filter(e=>e.alive && e.kind!=="noise").map(e=>e.kind))];
       if(room > runtime.room) {
         escapeKinds.forEach(kind=>badge("escape",kind));
@@ -1802,6 +1836,7 @@ export default function IonGame() {
         const position = new THREE.Vector3((rand() - 0.5) * (runtime.roomWidth - 5), 0.35, (rand() - 0.5) * (runtime.roomLength - 7));
         makePickup("crystal", position, key, runtime.mandatoryCrystal === key && i === 0);
       }
+      if(runtime.ascendedWorld)makePickup("glassShard",new THREE.Vector3(-1.6,.35,runtime.roomLength/2-5));
       if(runtime.goldBarPresent)
         makePickup("gold",new THREE.Vector3((rand()-.5)*Math.max(3,runtime.roomWidth-6),.42,(rand()-.5)*Math.max(5,runtime.roomLength-9)));
       if(runtime.winBadgeSpawned)
@@ -1928,6 +1963,13 @@ export default function IonGame() {
       }
       if(runtime.layout!=='inversion')buildEntityEvents(restore);
       finishRoomLayout(Boolean(restore));
+      // Mining needs a stable interaction window: vortices must not pull a player
+      // away from deposits, capsules or required resonators between strikes.
+      const miningTasks=[...runtime.pickups.filter(p=>p.kind==='crystal'||p.object.userData.sealedCapsule).map(p=>p.object),...runtime.stations.filter(v=>v.kind==='resonator').map(v=>v.object)];
+      runtime.hazards=runtime.hazards.filter(h=>{
+        const blocked=miningTasks.some(o=>Math.hypot(o.position.x-h.object.position.x,o.position.z-h.object.position.z)<h.radius+1);
+        if(blocked){runtime.roomGroup.remove(h.object);disposeModel(h.object);}return !blocked;
+      });
       if(cave)addRockyCaveFloor(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position)]);
       if(runtime.layout!=='standard'&&runtime.layout!=='inversion')badge('secret',`layout-${runtime.layout}`);
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
@@ -1992,7 +2034,7 @@ export default function IonGame() {
       updateHud(true);
     }
     function snapshot(): SaveData {
-      return { inversionTime: runtime.inversionTime, chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
+      return { pickaxeLevel:runtime.pickaxeLevel,miningProgress:Object.fromEntries([...runtime.pickups.map(p=>[`p${p.object.userData.pickupId}`,p.object.userData.mineHits??0]),...runtime.stations.map((v,i)=>[`s${i}`,v.object.userData.mineHits??0])]), inversionTime: runtime.inversionTime, chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
         discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion, lightInfusion: runtime.lightInfusion,
         loreRoute:{...runtime.loreRoute},encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,boonieMet:runtime.boonieMet,accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
         wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil },
@@ -2013,6 +2055,7 @@ export default function IonGame() {
         winQuestBlob:runtime.winQuestBlob,winBadgeSpawned:runtime.winBadgeSpawned };
     }
     function applySave(save: SaveData) {
+      runtime.pickaxeLevel=Math.max(0,Math.min(MAX_PICKAXE_LEVEL,save.pickaxeLevel??0));
       runtime.chaseState = save.chaseState ?? null;
       runtime.loreRoute={...(save.loreRoute??emptyLoreRoute())};runtime.encounters=JSON.parse(JSON.stringify(save.encounters??emptyEntityEvents()));runtime.boons=[...(save.boons??[])];runtime.resonatorWorld=save.resonatorWorld??false;runtime.boonieMet=save.boonieMet??false;
       runtime.ammo = save.ammo; runtime.battery = save.battery; runtime.crystals = { ...save.crystals };
@@ -2030,8 +2073,11 @@ export default function IonGame() {
       runtime.ascendedCleared=Boolean(save.ascendedCleared);runtime.winQuestArmed=Boolean(save.winQuestArmed);
       runtime.winQuestBlob=Boolean(save.winQuestBlob);runtime.winBadgeSpawned=Boolean(save.winBadgeSpawned);
       runtime.checkpoint = save; buildRoom(save.room,save);
+      runtime.pickups.forEach(p=>p.object.userData.mineHits=save.miningProgress?.[`p${p.object.userData.pickupId}`]??0);
+      runtime.stations.forEach((v,i)=>v.object.userData.mineHits=save.miningProgress?.[`s${i}`]??0);
     }
     function resetRun() {
+      runtime.pickaxeLevel=0;runtime.mineSwing=0;
       runtime.chaseState = null;
       runtime.ammo = 6; runtime.maxAmmo = 8; runtime.battery = 100; runtime.crystals = EMPTY_COUNTS(); runtime.discovered.clear();
       runtime.gunInfusion = null; runtime.lightInfusion = null; runtime.accessKeys = 0;
@@ -2058,13 +2104,14 @@ export default function IonGame() {
         if(!assetsReady){setPartyStatus("WAIT FOR THE FACILITY TO LOAD");return;}
         const inGame=runtime.running||screenRef.current==="pause"||screenRef.current==="inventory";
         if(!inGame){pendingHost=true;start(true);return;}
-        showScreen("party");const code=await party.host();setPartyInput(code);if(hasTripleDigit(code))badge("multiplayer","triple-code");updateHud(true);
+        runtime.running=false;showScreen("party");if(document.pointerLockElement)document.exitPointerLock();const code=await party.host();setInviteLink(partyInviteUrl(window.location.href,code));setInviteCopied(false);if(hasTripleDigit(code))badge("multiplayer","triple-code");updateHud(true);
       }catch(error){setPartyStatus(error instanceof Error?error.message:"Could not host room");party.close();}
     }
     async function joinParty(code:string){
-      const normalized=code.trim().toUpperCase();
-      if(!validPartyCode(normalized)){setPartyStatus("Enter a five-digit multiplayer code");return;}
-      try{showScreen("party");setPartyStatus("CONNECTING TO HOST…");await party.join(normalized);if(hasTripleDigit(normalized))badge("multiplayer","triple-code");setPartyStatus("CONNECTED · LOADING THE HOST'S ROOM");}
+      const normalized=parsePartyInvite(code);
+      if(!normalized){setPartyStatus("Paste a valid ION invite link");return;}
+      if(!assetsReady){setPartyStatus("WAIT FOR THE FACILITY TO LOAD");return;}
+      try{runtime.running=false;runtime.keysDown.clear();showScreen("party");if(document.pointerLockElement)document.exitPointerLock();setPartyStatus("CONNECTING TO HOST…");await party.join(normalized);if(hasTripleDigit(normalized))badge("multiplayer","triple-code");setPartyStatus("CONNECTED · LOADING THE HOST'S ROOM");}
       catch(error){setPartyStatus(error instanceof Error?error.message:"Could not join room");party.close();}
     }
     async function redeemBadgeCode(code:string){
@@ -2110,7 +2157,7 @@ export default function IonGame() {
       runtime.enemies[runtime.enemies.length-1].object.position.copy(runtime.player).add(new THREE.Vector3(0,-1.65,-3));
       close();applyBoon(BOONS[Math.floor(Math.random()*BOONS.length)].id);
     }
-    function leaveParty(){party.close();runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;setPartyStatus("LEFT THE MULTIPLAYER ROOM");updateHud(true);}
+    function leaveParty(){runtime.running=false;setInviteLink("");party.close();runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;setPartyStatus("LEFT THE MULTIPLAYER ROOM");updateHud(true);}
     function openBadges(){badgeReturnRef.current=screenRef.current;runtime.running=false;showScreen("badges");if(document.pointerLockElement)document.exitPointerLock();}
     function closeBadges(){if(badgeReturnRef.current===null)resume();else showScreen(badgeReturnRef.current);}
     let pendingRun: "fresh"|"resume"|null=null;
@@ -2172,14 +2219,51 @@ export default function IonGame() {
       if (document.pointerLockElement) document.exitPointerLock(); updateHud(true);
     }
     function removeEnemy(enemy: Enemy) { enemy.alive = false; runtime.roomGroup.remove(enemy.object); disposeModel(enemy.object); }
+    function mineNearest():boolean {
+      if(!runtime.nearest)return false;
+      const n=runtime.nearest;
+      const p=n.kind==='pickup'?runtime.pickups[n.index!]:null;
+      const st=n.kind==='station'?runtime.stations[n.index!]:null;
+      const object=p&&(p.kind==='crystal'||p.object.userData.sealedCapsule)?p.object:st?.kind==='resonator'&&!st.activated?st.object:null;
+      if(!object)return false;
+      if(runtime.mineSwing>0)return true;
+      if(st?.needsShield&&runtime.inventory.resonationShield<1){notify("RESONATION SHIELD REQUIRED · SEARCH THE CABINET");return true;}
+      runtime.mineSwing=1;const total=miningHits(runtime.pickaxeLevel,Boolean(st)||runtime.chaseRoom||runtime.haidIniActive||runtime.noiseActive);
+      object.userData.mineHits=(object.userData.mineHits??0)+1;
+      runtime.audio?.pulse('step');object.scale.multiplyScalar(.94);
+      if(object.userData.mineHits>=total){
+        if(p)collect(n.index!);
+        else if(st){party.send({type:'action',room:runtime.room,action:'resonator',id:n.index});openStation('resonator',st);}
+      }else notify(`PICKAXE · ${object.userData.mineHits}/${total} · STRIKE AGAIN`);
+      return true;
+    }
+    function toggleView(){runtime.thirdPerson=!runtime.thirdPerson;notify(runtime.thirdPerson?'THIRD PERSON · V TO SWITCH':'FIRST PERSON · V TO SWITCH');updateHud(true);}
+    function upgradePickaxe(){
+      if(voidBlocked())return;
+      if(runtime.pickaxeLevel>=MAX_PICKAXE_LEVEL){notify('PICKAXE FULLY UPGRADED');return;}
+      if(runtime.inventory.sang<1){notify('ONE VIAL OF SÁNG REQUIRED');return;}
+      runtime.inventory.sang--;runtime.pickaxeLevel++;
+      runtime.pickaxeModel.traverse(n=>{if(n instanceof THREE.Mesh){const m=n.material as THREE.MeshStandardMaterial;if(m.metalness>.5){m.color.setHex(0xa93a52);m.emissive.setHex(0x6a0b25);m.emissiveIntensity=runtime.pickaxeLevel*.2;}}});notify(`SÁNG PICKAXE · LEVEL ${runtime.pickaxeLevel}`);updateHud(true);saveRun(false);
+    }
+    function repairJar(){
+      if(voidBlocked())return;
+      if(!canRepairJar(runtime.inventory)){notify('NEED ONE JAR SHARD AND ONE GLUE');return;}
+      runtime.inventory.glassShard--;runtime.inventory.glue--;runtime.inventory.bottle++;notify('EMPTY JAR REPAIRED · SCOOP BLOOD TO MAKE SÁNG');updateHud(true);saveRun(false);
+    }
+    function customize(input:Appearance){
+      runtime.appearance=cleanAppearance(input);setAppearance(runtime.appearance);
+      scene.remove(runtime.localAvatar);disposeModel(runtime.localAvatar);runtime.localAvatar=createPlayerModel(runtime.appearance);scene.add(runtime.localAvatar);
+      try{localStorage.setItem('ion-appearance-v1',JSON.stringify(runtime.appearance));}catch{/* session appearance still works */}
+    }
     function fire() {
       if(voidBlocked())return;
       if (runtime.infectionTime >= 0) return;
       if (!runtime.running || runtime.cameraMode || screenRef.current) return;
       if (runtime.hiding) { runtime.audio?.pulse("error"); notify("TRAPDOOR SEALED · FIRING BLOCKED"); return; }
+      if(mineNearest())return;
       if (runtime.ammo <= 0) { runtime.audio?.pulse("error"); notify("CHAMBER EMPTY · CRAFT AMMUNITION"); return; }
       runtime.ammo = Math.max(0,runtime.ammo-(runtime.boons.includes("famine")||runtime.boons.includes("hungry")?2:1)); runtime.gunKick = 1; runtime.audio?.pulse("shot");
-      const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(), camera);
+      const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(), camera);if(runtime.thirdPerson)ray.ray.origin.copy(runtime.player);
       const targets = runtime.enemies.filter((enemy) => enemy.alive).flatMap((enemy) => {
         const meshes: THREE.Object3D[] = []; enemy.object.traverse((child) => { if (child instanceof THREE.Mesh) meshes.push(child); }); return meshes;
       });
@@ -2233,7 +2317,8 @@ export default function IonGame() {
       if(!fromPeer)partyRef.current?.send({type:"action",room:runtime.room,action:"pickup",id:pickupId});
       runtime.removedPickups.add(pickupId);
       runtime.roomGroup.remove(pickup.object); disposeModel(pickup.object); runtime.pickups.splice(index, 1); runtime.audio?.pulse("pickup");
-      if(pickup.kind==="candy"){
+      if(pickup.kind==="glassShard"||pickup.kind==="glue"){runtime.inventory[pickup.kind]++;notify(pickup.kind==='glassShard'?"JAR SHARD +1 · REPAIR WITH GLUE IN INVENTORY":"GLUE +1");
+      } else if(pickup.kind==="candy"){
         const result=candyOutcome(Math.random());
         if(result==="death")kill("SUGAR RUSH · POISONED CANDY","boonie");
         if(result==="slow")runtime.boons.push("bloodline");
@@ -2439,6 +2524,7 @@ export default function IonGame() {
     function interact() {
       if (runtime.infectionTime >= 0) return;
       if (!runtime.running || runtime.cameraMode || screenRef.current) return; const nearest = runtime.nearest; if (!nearest) return;
+      if(mineNearest())return;
       if (nearest.kind === "pickup" && nearest.index !== undefined) collect(nearest.index);
       if (nearest.kind === "station" && nearest.index !== undefined) { const station = runtime.stations[nearest.index]; if (station){if(station.kind==="resonator"&&!station.activated)partyRef.current?.send({type:"action",room:runtime.room,action:"resonator",id:nearest.index});openStation(station.kind, station);} }
       if(nearest.kind==="teammate" && runtime.remotePose?.dead){partyRef.current?.send({type:"action",room:runtime.room,action:"revive"});runtime.remotePose.dead=false;badge("revive");notify("TEAMMATE REVIVED");}
@@ -2529,12 +2615,17 @@ export default function IonGame() {
         runtime.inventory.goldBar--;badge("paradox","ascended");if(runtime.paradoxWorld)badge("paradox","ascendidox");
         beginAscended(runtime.paradoxWorld);close();return;
       }
+      if(key==="glassShard"||key==="glue"){repairJar();return;}
       if(key==="sang"){
         if(runtime.resonatorWorld){notify("VIALS CANNOT BYPASS THE RESONATOR TRIAL");return;}
-        runtime.inventory.sang--;runtime.chaseState=null;
-        if(runtime.ascendedWorld){finishAscended();}
-        else buildRoom(Math.min(200,runtime.room+50));
-        if(!runtime.won)close();notify("VIAL OF SÁNG · FIFTY-DOOR RIFT CONSUMED");updateHud(true);return;
+        if(runtime.inventory.sang<SANG_SKIP_COST){notify('FOUR VIALS OF SÁNG REQUIRED TO SKIP 50 DOORS');return;}
+        runtime.inventory.sang-=SANG_SKIP_COST;runtime.chaseState=null;
+        const target=sangSkipTarget(runtime.room,runtime.ascendedDoor,runtime.ascendedWorld,runtime.loreRoute.phase);
+        if(runtime.ascendedWorld&&runtime.loreRoute.phase==='ascended'){
+          runtime.ascendedDoor=50;advanceDimension();
+        }else if(runtime.ascendedWorld){finishAscended();}
+        else {if(runtime.loreRoute.phase==='redox')runtime.loreRoute.door=target;buildRoom(target);}
+        if(!runtime.won&&runtime.loreRoute.phase!=='reveal')close();notify("FOUR VIALS OF SÁNG · FIFTY-DOOR RIFT CONSUMED");updateHud(true);return;
       }
       runtime.inventory[key] -= 1;
       if (key === "pearl") runtime.battery = Math.min(100,runtime.battery+25);
@@ -2578,7 +2669,7 @@ export default function IonGame() {
     }
     function touchLookEnd(id: number) { if (runtime.lastTouchLook?.id === id) runtime.lastTouchLook = null; }
 
-    actionRef.current = { start, resume, interact, fire, toggleLight, jump, close, craft, infuse, synthesizeFluorite,
+    actionRef.current = {toggleView,upgradePickaxe,repairJar,customize, start, resume, interact, fire, toggleLight, jump, close, craft, infuse, synthesizeFluorite,
       buyPersItem, buyBasdino, openInventory, useItem, banish, restartCheckpoint,
       toggleJar,exploreExtraction,
       confirmBoons,rememberNumber,answerMemory,offerVoid,offerLore,nextLoreScene,startNewSlot,loadSlot,saveRun:()=>saveRun(true),hostParty,joinParty,redeemBadgeCode,grantBadge,toggleBoon,completeArchive,leaveParty,openBadges,closeBadges,
@@ -2596,15 +2687,15 @@ export default function IonGame() {
       runtime.pickups.forEach((pickup, index) => {
         if (!pickup.object.visible||!visible(pickup.object.position)) return; const distance = pickup.object.position.distanceTo(runtime.player);
         if (distance < bestDistance) { bestDistance = distance; runtime.nearest = { kind: "pickup", index };
-          runtime.prompt = pickup.object.userData.sealedCapsule ? "E  BREAK CRYSTAL · EXTRACT NOISE CAPSULE" : pickup.kind === "neonBadge" ? "E  CLAIM THE FLOATING *+* BADGE" : pickup.kind === "gold" ? "E  TAKE GOLD BAR · ENTER ASCENDED" : pickup.kind === "jar" ? "E  TAKE ESSENCE JAR" : pickup.kind === "crystal" && pickup.crystal ? `E  COLLECT ${CRYSTALS[pickup.crystal].label.toUpperCase()}` : `E  TAKE ${pickup.kind.toUpperCase()}`; }
+          runtime.prompt = pickup.object.userData.sealedCapsule ? "E / CLICK · PICKAXE · EXTRACT CAPSULE" : pickup.kind === "neonBadge" ? "E  CLAIM THE FLOATING *+* BADGE" : pickup.kind === "gold" ? "E  TAKE GOLD BAR · ENTER ASCENDED" : pickup.kind === "jar" ? "E  TAKE ESSENCE JAR" : pickup.kind === "crystal" && pickup.crystal ? `E / CLICK · MINE ${CRYSTALS[pickup.crystal].label.toUpperCase()} · ${pickup.object.userData.mineHits??0}/${miningHits(runtime.pickaxeLevel,runtime.chaseRoom||runtime.noiseActive||runtime.haidIniActive)}` : `E  TAKE ${pickup.kind.toUpperCase()}`; }
       });
       runtime.stations.forEach((station, index) => {
         if(!visible(station.object.position))return;
-        const distance = station.object.position.distanceTo(runtime.player);
+        const distance = station.object.position.clone().add(new THREE.Vector3(0,.85,0)).distanceTo(runtime.player);
         if (distance < bestDistance && !(station.activated && (station.kind === "resonator" || station.kind === "cabinet" || station.kind === "noiseCore"))) { bestDistance = distance; runtime.nearest = { kind: "station", index };
           runtime.prompt = station.kind === "noiseCore" ? "E  SACRIFICE QUARTZ / OBSIDIAN / CITRINE FOR CAPSULE" : station.kind === "lore" ? "E  OFFER VIAL OF SÁNG TO LORE" : station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
             : station.kind === "trapdoor" ? runtime.chaseRoom ? "TRAPDOOR JAMMED · KEEP RUNNING" : runtime.haidIniActive ? runtime.hiding ? "E  EXIT · HAID-INI CAN ENTER" : "E  HIDE · UNSAFE FROM HAID-INI" : runtime.hiding ? "E  EXIT TRAPDOOR" : "E  HIDE IN TRAPDOOR"
-            : station.kind === "resonator" ? runtime.layout==='inversion'&&!station.activated ? "E  BREAK INVERTED ANCHOR" : station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  EXTRACT · RESONATION SHIELD REQUIRED" : "E  BREAK CRYSTAL · TUNE HIDDEN RESONATOR"
+            : station.kind === "resonator" ? runtime.layout==='inversion'&&!station.activated ? "E / CLICK · PICKAXE · BREAK ANCHOR" : station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  EXTRACT · RESONATION SHIELD REQUIRED" : "E / CLICK · PICKAXE · MINE RESONATOR"
             : `E  USE ${station.kind.replace("infusionsmith", "INFUSIONSMITH").toUpperCase()}`; }
       });
       if (runtime.door) {
@@ -2838,7 +2929,7 @@ export default function IonGame() {
           }
         }
       });
-      runtime.pickups.forEach((pickup, index) => { pickup.object.rotation.y += dt * (0.3 + index * 0.03); pickup.object.position.y = (pickup.object.userData.baseY ?? 0.3) + Math.sin(performance.now() * 0.0018 + index) * 0.08; });
+      runtime.pickups.forEach((pickup, index) => { if(pickup.kind==="crystal"||pickup.object.userData.sealedCapsule)return; pickup.object.rotation.y += dt * (0.3 + index * 0.03); pickup.object.position.y = (pickup.object.userData.baseY ?? 0.3) + Math.sin(performance.now() * 0.0018 + index) * 0.08; });
       runtime.basdinoModels.forEach((model, index) => {
         const side = index % 2 ? 1 : -1; const back = 1.65 + Math.floor(index / 2) * 0.75;
         const target = runtime.player.clone().add(new THREE.Vector3(side * (0.75 + index * 0.12), -1.65, back).applyAxisAngle(new THREE.Vector3(0, 1, 0), runtime.yaw));
@@ -2910,12 +3001,31 @@ export default function IonGame() {
         }
       }
       updateRemoteAvatar();
+      runtime.flashlight.position.set(.08,-.08,0);
+      runtime.mineSwing=Math.max(0,runtime.mineSwing-dt*4);
+      runtime.pickaxeModel.visible=runtime.mineSwing>0&&!runtime.thirdPerson&&!runtime.dead;
+      runtime.pickaxeModel.rotation.x=-.4-Math.sin(runtime.mineSwing*Math.PI)*1.2;
+      if(runtime.mineSwing>0)runtime.gunModel.visible=false;
+      runtime.localAvatar.visible=runtime.thirdPerson&&!runtime.dead&&!runtime.cameraMode&&!runtime.hiding;
+      runtime.localAvatar.position.copy(runtime.player);runtime.localAvatar.rotation.y=runtime.yaw;
+      animatePlayer(runtime.localAvatar,now*.001,runtime.keysDown.has('KeyW')||runtime.keysDown.has('KeyS')||runtime.keysDown.has('KeyA')||runtime.keysDown.has('KeyD')||Math.abs(runtime.touchMove.x)+Math.abs(runtime.touchMove.y)>.1,runtime.mineSwing);
+      if(runtime.localAvatar.visible){
+        const origin=runtime.player.clone().add(new THREE.Vector3(0,.25,0));
+        const direction=new THREE.Vector3(.65,.5,3.3).applyEuler(new THREE.Euler(runtime.pitch,runtime.yaw,0,'YXZ'));
+        let distance=direction.length();direction.normalize();
+        for(const box of runtime.obstacles){const hit=new THREE.Ray(origin,direction).intersectBox(box,new THREE.Vector3());if(hit)distance=Math.min(distance,Math.max(.15,origin.distanceTo(hit)-.25));}
+        const target=origin.clone().addScaledVector(direction,distance);
+        target.x=THREE.MathUtils.clamp(target.x,-runtime.roomWidth/2+.2,runtime.roomWidth/2-.2);
+        target.z=THREE.MathUtils.clamp(target.z,-runtime.roomLength/2+.2,runtime.roomLength/2-.2);
+        camera.position.copy(target);camera.lookAt(runtime.player.clone().add(new THREE.Vector3(0,0,-8).applyEuler(new THREE.Euler(runtime.pitch,runtime.yaw,0,'YXZ'))));runtime.gunModel.visible=false;camera.updateMatrixWorld(true);runtime.flashlight.position.copy(camera.worldToLocal(runtime.player.clone().add(new THREE.Vector3(.1,.05,-.25).applyAxisAngle(new THREE.Vector3(0,1,0),runtime.yaw))));
+      }
       renderer.render(scene, camera); animationFrame = requestAnimationFrame(animate);
     }
     function onResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6)); renderer.setSize(window.innerWidth, window.innerHeight); }
     function onKeyDown(event: KeyboardEvent) {
       const target=event.target as HTMLElement|null;if(target?.tagName==="INPUT"||target?.tagName==="TEXTAREA"||target?.isContentEditable)return;
       if(event.code==="KeyI"){if(event.repeat)return;event.preventDefault();if(screenRef.current==="inventory")close();else if(runtime.running&&!runtime.dead)openInventory();return;}
+      if(event.code==="KeyV"&&!event.repeat&&!screenRef.current){toggleView();return;}
       runtime.keysDown.add(event.code); if (event.repeat) return; if (event.code === "KeyE") interact(); if (event.code === "KeyF") toggleLight(); if (event.code === "Space") { event.preventDefault(); jump(); } }
     function onKeyUp(event: KeyboardEvent) { runtime.keysDown.delete(event.code); }
     function onMouseMove(event: MouseEvent) { if (document.pointerLockElement !== canvas || !runtime.running || runtime.cameraMode) return; runtime.yaw -= event.movementX * 0.0021; runtime.pitch -= event.movementY * 0.0019; runtime.pitch = THREE.MathUtils.clamp(runtime.pitch, -1.25, 1.25); }
@@ -2935,9 +3045,11 @@ export default function IonGame() {
         emitter.position.set(0, 0.12, -0.25); gunModel.add(emitter);
       }
       buildRoom(1); assetsReady = true; setAssetProgress(100);
+      const invite=typeof window.location?.href==='string'?parsePartyInvite(window.location.href):null;
+      if(invite){setPartyInput(window.location.href);showScreen('party');setPartyStatus('INVITE FOUND · PRESS JOIN TO ENTER YOUR FRIEND’S RUN');}
     });
     return () => {
-      disposed = true;party.close();partyRef.current=null; cancelAnimationFrame(animationFrame); clearRoom(); disposeModel(gunModel); assets.dispose();
+      disposed = true;party.close();partyRef.current=null; cancelAnimationFrame(animationFrame); clearRoom(); disposeModel(gunModel);disposeModel(runtime.localAvatar);disposeModel(pickaxeModel); assets.dispose();
       delete document.body.dataset.paradox;delete document.body.dataset.ascended;delete document.body.dataset.riftfall;
       window.removeEventListener("resize", onResize); window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("mousemove", onMouseMove); window.removeEventListener("mousedown", onMouseDown); document.removeEventListener("pointerlockchange", onPointerLock);
@@ -2978,9 +3090,10 @@ export default function IonGame() {
           </div>
         </section>
         {hud.encounters.voidDebt&&<aside className="void-debt"><strong>VOID · {hud.encounters.voidDebt.paid}/50 CRYSTALS · {hud.encounters.voidDebt.doorsLeft} DOORS LEFT</strong><p>Equipment and stations are sealed. Gather crystals and choose one of five Void passages.</p><button onClick={()=>actionRef.current?.offerVoid()}>OFFER CARRIED CRYSTALS</button></aside>}
+        <button className="view-toggle" onClick={()=>act?.toggleView()}>{hud.thirdPerson?"FIRST PERSON":"THIRD PERSON"} [V]</button>
         <button className="inventory-toggle" onClick={() => actionRef.current?.openInventory()}>INVENTORY [I] <b>{inventoryCount}</b></button>
         <button className="badge-toggle" onClick={() => actionRef.current?.openBadges()}>BADGES <b>{hud.badgeCount}/{BADGES.length}</b></button>
-      {hud.partyConnected&&<div className="party-indicator">{hud.playerName} + {hud.teammateName||"CONNECTING"} · {hud.partyCode}</div>}
+      {hud.partyConnected&&<div className="party-indicator">{hud.playerName} + {hud.teammateName||"CONNECTING"} · LINKED</div>}
       {(hud.ascendedWorld||hud.paradoxWorld||hud.riftOpen)&&<div className={`paradox-indicator ${hud.ascendedWorld?"ascended-indicator":""}`}>{hud.ascendedWorld?`ASCENDED · ${String(hud.ascendedDoor).padStart(2,"0")} / 20`:hud.paradoxWorld?`PARADOX · *${String(hud.room).padStart(3,"0")} / *200`:"PERS TEAR OPEN · ENTER TO FALL"}</div>}
         <section className="hud crystal-rack" aria-label="Collected crystals">
           {CRYSTAL_KEYS.map((key) => <div className={hud.discovered.includes(key) ? "found" : "unknown"} key={key}><i style={{ background: CRYSTALS[key].css }} /><span>{CRYSTALS[key].short}</span><b>{hud.crystals[key]}</b></div>)}
@@ -2997,8 +3110,9 @@ export default function IonGame() {
           <span><b>7% GRIN ROLL</b> gives 10 seconds to hide</span><span><b>FLUORITE</b> is synthesized currency for Pers</span><span><b>ROOM 25×</b> starts a Blob chase · Hub at 32</span></div></div>
         <button className="text-button" onClick={()=>showScreen("boons")}>BOONS · {selectedBoons.length} SELECTED</button><button className="primary-button" onClick={() => showScreen("saves")}>PLAY · SAVED RUNS</button>
         <button className="text-button" onClick={() => showScreen("party")}>PLAY WITH A FRIEND</button>
+        <button className="text-button" onClick={()=>{customizeReturn.current='start';showScreen('customize');}}>CUSTOMISE SURVIVOR</button>
         <button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button>
-        <div className="controls-copy">{touchCapable ? "LEFT PAD MOVE · RIGHT SIDE LOOK · USE THE ACTION BUTTONS" : "WASD MOVE · MOUSE LOOK · SPACE JUMP · CLICK FIRE · E INTERACT · I INVENTORY · F LIGHT · SHIFT RUN"}</div>
+        <div className="controls-copy">{touchCapable ? "LEFT PAD MOVE · RIGHT SIDE LOOK · USE THE ACTION BUTTONS" : "WASD MOVE · SPACE JUMP · CLICK FIRE / MINE · E INTERACT / MINE · I INVENTORY · V CAMERA · F LIGHT · SHIFT RUN"}</div>
         <small className={`headphones ${webglUnavailable ? "danger" : ""}`}>{webglUnavailable ? "ION REQUIRES WEBGL 2 · OPEN ON A DEVICE WITH 3D GRAPHICS ENABLED" : assetProgress < 100 ? `PREPARING FACILITY · ${assetProgress}%` : "HEADPHONES RECOMMENDED · ONE-TOUCH DEATH · CHECKPOINTS EVERY 25 ROOMS"}</small>
       </section>}
       {screen === "tutorial" && <section className="tutorial-screen overlay-panel">
@@ -3017,7 +3131,7 @@ export default function IonGame() {
           </footer>
         </div>
       </section>}
-      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyCode||"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
+      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyConnected?"CONNECTED":hud.partyCode?"INVITE READY":"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
       {screen === "dead" && <section className="death-screen creature-death overlay-panel compact-panel" data-scare={hud.deathKind} style={{"--scare-color":`#${MONSTER_COLORS[hud.deathKind].toString(16).padStart(6,"0")}`} as React.CSSProperties}><div className="scare-distortion" aria-hidden="true" /><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>{MONSTER_NAMES[hud.deathKind]}</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div><div className="serp-review"><div className="serp-face" aria-label="SERP, a figure carrying a yellow light"><i /></div><strong>SERP · A LIGHT AFTER THE END</strong><p>{serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).well}</p><p>{serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).percent}% of this route completed.</p><p>Next time: {serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).next}</p></div>{hud.partyConnected&&<p>YOUR TEAMMATE CAN REVIVE YOU NEARBY</p>}<button className="primary-button danger-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.restartCheckpoint();}}>RETURN TO CHECKPOINT SOLO</button><button className="text-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.start(true);}}>NEW DESCENT</button></div></section>}
       {screen === "saves" && <MenuShell title="SAVED RUNS" subtitle="Three independent local slots · rooms save automatically when entered" onClose={() => showScreen("start")}><div className="save-grid">
         {savedRuns.map((slot,index)=><article className="save-card" key={index}><small>SLOT {index+1}</small><strong>{slot?`ROOM ${String(slot.state.room).padStart(3,"0")}`:"EMPTY SLOT"}</strong><p>{slot?`Saved ${new Date(slot.savedAt).toLocaleString()} · ${slot.state.discovered?.length??0}/7 minerals`:"Start a new descent and save automatically."}</p>{slot&&<button onClick={()=>actionRef.current?.loadSlot(index)}>CONTINUE RUN</button>}<button className="secondary" onClick={()=>actionRef.current?.startNewSlot(index)}>{slot?"NEW RUN IN THIS SLOT":"START NEW RUN"}</button></article>)}
@@ -3025,7 +3139,9 @@ export default function IonGame() {
       {screen === "boons" && <MenuShell title="BOONS" subtitle="Choose Boons, then confirm to enter your run · Saved Boons remain active" onClose={()=>showScreen("saves")}><button className="primary-button" onClick={()=>actionRef.current?.confirmBoons()}>CONFIRM BOONS · ENTER RUN</button><div className="badge-grid">{BOONS.map(b=><article key={b.id} className={selectedBoons.includes(b.id)?"earned":""}><span>{b.negative?"NEGATIVE / CHALLENGE":"POSITIVE"}</span><strong>{b.name}</strong><p>{b.note}</p><button onClick={()=>actionRef.current?.toggleBoon(b.id)}>{selectedBoons.includes(b.id)?"REMOVE":"ACTIVATE"}</button></article>)}</div></MenuShell>}
       {screen === "lore" && <MenuShell title="LORE · TEN SOULS" subtitle="Door 201 · each entity remembers its Pers form and the nightmare beneath it" onClose={()=>{}}><div className="lore-scene"><div className="lore-choir" aria-label="The ten entities in their Pers forms">{LORE_NIGHTMARES.map(([name],index)=><span key={name} className={index===hud.loreRoute.scene?"awakening":""} title={name}>✧<small>{name}</small></span>)}</div><div className="lore-pers">PERS FORM · {LORE_NIGHTMARES[hud.loreRoute.scene]?.[0]}</div><strong>{LORE_NIGHTMARES[hud.loreRoute.scene]?.[0]} EMERGES FROM BELOW</strong><p>{LORE_NIGHTMARES[hud.loreRoute.scene]?.[1]}</p><small>{hud.loreRoute.scene+1} / 10</small><button onClick={()=>actionRef.current?.nextLoreScene()}>{hud.loreRoute.scene===9?"BEGIN DOOR 300 MEGA CHASE":"REVEAL THE NEXT NIGHTMARE"}</button></div></MenuShell>}
       {screen === "memory" && <MenuShell title="X::::RamYraM::::X" subtitle={hud.encounters.memory?.phase==="quiz"?"Which number did I show you? A wrong answer grants a random negative Boon.":"Remember this number. I will ask again at a future prime door."} onClose={()=>{}}><div className="memory-trial">{hud.encounters.memory?.phase==="reveal"?<><strong className="memory-number">{hud.encounters.memory.number}</strong><button className="primary-button" onClick={()=>actionRef.current?.rememberNumber()}>I HAVE MEMORIZED IT · CONTINUE</button></>:hud.encounters.memory?.choices.map(answer=><button key={answer} onClick={()=>actionRef.current?.answerMemory(answer)}>{answer}</button>)}</div></MenuShell>}
-      {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle={`You are ${hud.playerName} · two players · real-time WebRTC`} onClose={() => {if(runtimeRef.current?.room===1&&!partyRef.current?.code)showScreen("start");else showScreen("pause");}}><div className="party-panel"><p>{partyStatus}</p>{hud.partyCode&&<><div className="party-code">{hud.partyCode}</div><p>{hud.playerName}{hud.teammateName?` + ${hud.teammateName}`:" · WAITING FOR A NAMED SURVIVOR"}</p></>}<button onClick={() => void actionRef.current?.hostParty()} disabled={Boolean(hud.partyCode)}>HOST A ROOM</button><label htmlFor="ion-party-code">JOIN A FRIEND</label><div className="party-join"><input id="ion-party-code" inputMode="text" maxLength={6} value={partyInput} onChange={event=>setPartyInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,6))} placeholder="ROOM CODE" /><button disabled={!validPartyCode(partyInput)} onClick={()=>void actionRef.current?.joinParty(partyInput)}>ENTER</button></div><p className="party-note">Keep the host page open until the second randomized survivor name appears. Cross-network connections use multiple encrypted WebRTC routes automatically.</p>{hud.partyCode&&<button className="secondary" onClick={()=>{actionRef.current?.leaveParty();showScreen("pause");}}>LEAVE PARTY</button>}{hud.partyCode&&<button onClick={()=>actionRef.current?.resume()}>RETURN TO GAME</button>}</div></MenuShell>}
+      {screen==='customize'&&<MenuShell title="SURVIVOR IDENTITY" subtitle="Saved on this browser · visible to your co-op partner" onClose={()=>showScreen(customizeReturn.current)}><div className="customize-layout"><SurvivorPreview appearance={appearance}/><div className="appearance-controls">{(['suit','trim','skin','visor'] as const).map(key=><label key={key}>{key.toUpperCase()}<input type="color" value={appearance[key]} onChange={e=>act?.customize({...appearance,[key]:e.target.value})}/></label>)}<label>HEADGEAR<select value={appearance.helmet} onChange={e=>act?.customize({...appearance,helmet:e.target.value as Appearance['helmet']})}><option value="sealed">Sealed helmet</option><option value="open">Uncovered face</option><option value="hood">Expedition hood</option></select></label><label>BUILD<select value={appearance.build} onChange={e=>act?.customize({...appearance,build:e.target.value as Appearance['build']})}>{['slim','regular','broad'].map(v=><option key={v}>{v}</option>)}</select></label><label>SUIT MARKINGS<select value={appearance.pattern} onChange={e=>act?.customize({...appearance,pattern:e.target.value as Appearance['pattern']})}>{['plain','rescue','hazard'].map(v=><option key={v}>{v}</option>)}</select></label><label>EXPEDITION PACK<input type="checkbox" checked={appearance.backpack} onChange={e=>act?.customize({...appearance,backpack:e.target.checked})}/></label><button onClick={()=>act?.customize(DEFAULT_APPEARANCE)}>RESTORE DEFAULT</button><p>Press V during play or use the camera button to see your character in third person.</p></div></div></MenuShell>}
+      {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle={`You are ${hud.playerName} · two survivors · link invites`} onClose={()=>showScreen(partyRef.current?.role||runtimeRef.current?.room!==1?'pause':'start')}><div className="party-panel"><p role="status">{partyStatus}</p>{inviteLink&&<><label htmlFor="share-link">YOUR INVITE LINK</label><input id="share-link" readOnly value={inviteLink} onFocus={e=>e.target.select()}/><button onClick={()=>{void navigator.clipboard.writeText(inviteLink).then(()=>setInviteCopied(true)).catch(()=>setPartyStatus('Select and copy the invite link above.'));}}>{inviteCopied?'COPIED':'COPY INVITE LINK'}</button></>}{hud.partyConnected&&<p>{hud.playerName} + {hud.teammateName||'SURVIVOR CONNECTED'}</p>}<button onClick={()=>void act?.hostParty()} disabled={Boolean(hud.partyCode)||assetProgress<100}>HOST A RUN · CREATE INVITE</button><label htmlFor="ion-party-code">JOIN FROM A FRIEND’S LINK</label><div className="party-join"><input id="ion-party-code" type="url" value={partyInput} onChange={e=>setPartyInput(e.target.value)} placeholder="Paste ION invite link"/><button disabled={!parsePartyInvite(partyInput)||assetProgress<100} onClick={()=>void act?.joinParty(partyInput)}>JOIN</button></div><p className="party-note">Open the link, then press JOIN. The host must keep the game open. If your network blocks WebRTC, try another network. A new host session needs a new invite.</p>{hud.partyCode&&<><button onClick={()=>act?.resume()}>RETURN TO GAME</button><button onClick={()=>{act?.leaveParty();showScreen('start');}}>LEAVE PARTY</button></>}</div></MenuShell>}
+
       {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/${BADGES.length} unlocked · Daily permission required`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-code-panel"><label htmlFor="ion-badge-code">DAILY BADGE PERMISSION</label><div className="badge-code-entry"><input id="ion-badge-code" inputMode="text" maxLength={32} value={badgeInput} onChange={event=>setBadgeInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,32))} placeholder="DAILY PERMISSION"/><button disabled={!badgeInput} onClick={()=>actionRef.current?.redeemBadgeCode(badgeInput)}>AUTHORIZE</button></div><small>{permissionDate===permissionDay()?"Authorized today · select a badge below":"Badge awards are locked until today’s permission is entered."}</small></div><div className="badge-grid">{BADGES.map(b=>{const earned=badgeProgress.unlocked.includes(b.id);const rarity=b.rarity??"standard";const classified=rarity==="starplus"&&!earned&&permissionDate!==permissionDay();const rarityLabel=rarity==="starplus"?"*+*":rarity==="plus"?"+":rarity.toUpperCase();return <article key={b.id} className={`${earned?"earned":"locked"} badge-${rarity}`}><span>{earned?"★ EARNED":"◇ LOCKED"} · {rarityLabel}</span><strong>{classified?"CLASSIFIED":b.title}</strong><p>{classified?"This badge can only be given by a secret facility condition.":b.description}</p>{!classified&&b.tutorial&&<small>FIELD TUTORIAL: {b.tutorial}</small>}{!earned&&permissionDate===permissionDay()&&<button onClick={()=>actionRef.current?.grantBadge(b.id)}>SELECT THIS BADGE</button>}</article>})}</div></MenuShell>}
       {screen === "win" && <section className="win-screen overlay-panel"><span className="eyebrow">EXTRACTION ROOM · SIGNAL RESTORED</span><h2>YOU REACHED<br /><strong>ROOM 200</strong></h2><p>Every infusion is stable. The blast doors open. Something below them keeps smiling.</p><div className="completion-ring" style={{ "--completion": `${discoveredPercent}%` } as React.CSSProperties}><span>7 / 7</span><small>INFUSIONS</small></div><button className="primary-button" onClick={() => actionRef.current?.start(true)}>DESCEND AGAIN</button><button className="text-button" onClick={() => actionRef.current?.exploreExtraction()}>EXPLORE EXTRACTION</button></section>}
       {screen === "crafter" && <MenuShell title="CRYSTAL CRAFTER" subtitle="Convert finite specimens into survival equipment" onClose={() => actionRef.current?.close()}><div className="recipe-grid">
@@ -3043,7 +3159,7 @@ export default function IonGame() {
         <article className="pers-offer basdino-offer"><span>10 FLUORITE</span><h3>BASDINO BOND</h3><p>A loyal Basdino follows you through the facility and sacrifices itself to absorb one fatal contact.</p><button onClick={() => actionRef.current?.buyBasdino()}>BOND BASDINO</button></article>
         <aside className="pers-balance"><small>CURRENCY</small><strong>{hud.crystals.fluorite}</strong><span>FLUORITE</span><small>COMPANIONS</small><strong>{hud.basdinos}</strong><span>BASDINOS</span></aside>
       </div></MenuShell>}
-      {screen === "inventory" && <MenuShell title="FIELD INVENTORY" subtitle={`${inventoryCount} carried items · ${hud.basdinos} Basdino bonus lives · ${hud.wardCharges} active wards`} onClose={() => actionRef.current?.close()}><div className="inventory-grid">{hud.encounters.voidDebt&&<button className="item-card" onClick={()=>actionRef.current?.offerVoid()}><strong>OFFER CRYSTALS TO VOID</strong><p>{hud.encounters.voidDebt.paid}/50 paid · {hud.encounters.voidDebt.doorsLeft} doors remain. All carried crystal types count.</p></button>}
+      {screen === "inventory" && <MenuShell title="FIELD INVENTORY" subtitle={`${inventoryCount} carried items · ${hud.basdinos} Basdino bonus lives · ${hud.wardCharges} active wards`} onClose={() => actionRef.current?.close()}><div className="mining-workbench"><strong>PICKAXE · LEVEL {hud.pickaxeLevel}/{MAX_PICKAXE_LEVEL}</strong><p>Start with a pickaxe. Strike crystals and resonators with E or click; Sáng makes mining faster.</p><button disabled={hud.inventory.sang<1||hud.pickaxeLevel>=MAX_PICKAXE_LEVEL} onClick={()=>act?.upgradePickaxe()}>UPGRADE PICKAXE · 1 SÁNG</button><button disabled={!canRepairJar(hud.inventory)} onClick={()=>act?.repairJar()}>REPAIR EMPTY JAR · 1 SHARD + 1 GLUE</button><button onClick={()=>{customizeReturn.current='inventory';showScreen('customize');}}>CUSTOMISE SURVIVOR</button></div><div className="inventory-grid">{hud.encounters.voidDebt&&<button className="item-card" onClick={()=>actionRef.current?.offerVoid()}><strong>OFFER CRYSTALS TO VOID</strong><p>{hud.encounters.voidDebt.paid}/50 paid · {hud.encounters.voidDebt.doorsLeft} doors remain. All carried crystal types count.</p></button>}
         {hud.jar&&<button className="item-card essence-jar" onClick={() => actionRef.current?.toggleJar()}><span>{hud.jarEquipped?"EQUIPPED":"STOWED"}</span><strong>ESSENCE JAR</strong><p>{hud.essence?"Filled with whirlpool Essence. Shoot Pers, then use the glitch with one Malachite.":"Equip this jar, jump into a whirlpool, and it will collect Essence."}</p><i>{hud.jarEquipped?"STOW JAR":"EQUIP JAR"}</i></button>}
         {(Object.keys(ITEMS) as ItemKey[]).map((key) => <button key={key} className="item-card" disabled={hud.inventory[key] <= 0} onClick={() => actionRef.current?.useItem(key)} style={{ "--item": ITEMS[key].color } as React.CSSProperties}><span>{hud.inventory[key]} OWNED</span><strong>{ITEMS[key].label}</strong><p>{ITEMS[key].note}</p><i>{key === "soul" ? "CHOOSE TARGET" : "USE ITEM"}</i></button>)}
       </div></MenuShell>}
@@ -3082,4 +3198,31 @@ function MenuShell({ title, subtitle, children, onClose }: { title: string; subt
 
 function Recipe({ name, cost, note, onClick }: { name: string; cost: string; note: string; onClick: () => void }) {
   return <button className="recipe-card" onClick={onClick}><span>{cost}</span><strong>{name}</strong><p>{note}</p><i>CRAFT</i></button>;
+}
+
+
+function SurvivorPreview({appearance}:{appearance:Appearance}){
+ const ref=useRef<HTMLCanvasElement>(null),model=useRef<THREE.Group|null>(null),sceneRef=useRef<THREE.Scene|null>(null);
+ const [available,setAvailable]=useState(false);
+ useEffect(()=>{
+  const canvas=ref.current;if(!canvas)return;
+  let renderer:THREE.WebGLRenderer;
+  try{renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});}catch{return;}
+  const scene=new THREE.Scene();sceneRef.current=scene;setAvailable(true);
+  const camera=new THREE.PerspectiveCamera(36,1,.1,30);camera.position.set(2,.5,4.7);camera.lookAt(0,-.65,0);
+  scene.add(new THREE.HemisphereLight(0xe2f3e4,0x17231a,2));
+  const key=new THREE.DirectionalLight(0xf3e4ce,4);key.position.set(-2,4,3);scene.add(key);
+  const rim=new THREE.DirectionalLight(0x6ae4ae,2);rim.position.set(2,2,-3);scene.add(rim);
+  const floor=new THREE.Mesh(new THREE.CylinderGeometry(.85,.85,.04,64),new THREE.MeshStandardMaterial({color:0x101d16,metalness:.35,roughness:.6}));floor.position.y=-1.7;scene.add(floor);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.5));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;
+  let frame=0,yaw=-.3,dragging=false,lastX=0;
+  const down=(e:PointerEvent)=>{dragging=true;lastX=e.clientX;canvas.setPointerCapture(e.pointerId);};
+  const move=(e:PointerEvent)=>{if(dragging){yaw+=(e.clientX-lastX)*.012;lastX=e.clientX;}};
+  const up=()=>{dragging=false;};
+  canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',up);
+  const draw=()=>{const w=canvas.clientWidth||320,h=canvas.clientHeight||370;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();if(model.current)model.current.rotation.y=yaw;renderer.render(scene,camera);frame=requestAnimationFrame(draw);};draw();
+  return ()=>{cancelAnimationFrame(frame);canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);canvas.removeEventListener('pointercancel',up);disposeModel(scene);sceneRef.current=null;model.current=null;renderer.dispose();};
+ },[]);
+ useEffect(()=>{const scene=sceneRef.current;if(!scene)return;if(model.current){scene.remove(model.current);disposeModel(model.current);}model.current=createPlayerModel(appearance);scene.add(model.current);},[appearance]);
+ return <div className="survivor-preview"><canvas ref={ref} aria-label="Custom survivor 3D preview" style={{width:'100%',height:370,touchAction:'none',display:available?'block':'none'}}/>{!available&&<div className="survivor-fallback"><span>FACILITY IDENTIFICATION</span><svg viewBox="0 0 200 250" role="img" aria-label="Suit colour schematic"><path d="M70 95 L42 115 L30 195 L48 200 L65 142 L65 225 L135 225 L135 142 L152 200 L170 195 L158 115 L130 95 Z" fill={appearance.suit} stroke={appearance.trim} strokeWidth="2"/><ellipse cx="100" cy="58" rx="28" ry="36" fill={appearance.helmet==='open'?appearance.skin:appearance.suit} stroke={appearance.trim} strokeWidth="2"/>{appearance.helmet!=='open'&&<path d="M75 48 L125 48 L121 70 L79 70 Z" fill={appearance.visor}/>}<path d="M79 111 V204 M121 111 V204 M65 159 H135" stroke={appearance.trim} strokeWidth="4" fill="none"/></svg><small>COLOUR SCHEMATIC · 3D PREVIEW NEEDS WEBGL 2</small></div>}<small>{available?'DRAG TO ROTATE · ':''}SURVIVOR / {appearance.build.toUpperCase()}</small></div>;
 }

@@ -98,13 +98,23 @@ export class ModelAssets {
           material.color.setHex(0xffffff);
           const low = new THREE.Color(options.tint).multiplyScalar(0.38).getHex();
           const high = new THREE.Color(options.tint).lerp(new THREE.Color(0x8ccfff),0.22).getHex();
-          applyGradient(material,low,high);
+          if(mineral){
+            node.geometry.computeBoundingBox();const box=node.geometry.boundingBox!;
+            const pos=node.geometry.getAttribute('position'),colors=new Float32Array(pos.count*3);
+            for(let i=0;i<pos.count;i++){
+              const t=(pos.getY(i)-box.min.y)/Math.max(.001,box.max.y-box.min.y);
+              const rock=new THREE.Color(0x544e45),base=new THREE.Color(options.tint).multiplyScalar(.35),tip=new THREE.Color(options.tint).lerp(new THREE.Color(0xf2edff),.48);
+              const c=t<.24?rock.lerp(base,THREE.MathUtils.smoothstep(t,.14,.24)):base.lerp(tip,THREE.MathUtils.smoothstep(t,.24,1));
+              c.toArray(colors,i*3);
+            }
+            node.geometry.setAttribute('color',new THREE.BufferAttribute(colors,3));material.vertexColors=true;
+          }else applyGradient(material,low,high);
           material.roughness = mineral ? .2 : .38;
           material.metalness = .18;
         }
         if (material.emissive && options.emissive !== undefined) {
           material.emissive.setHex(options.tint ?? 0x57cfc3);
-          material.emissiveIntensity = options.emissive;
+          material.emissiveIntensity = mineral ? Math.min(.17,options.emissive) : options.emissive;
         }
         return material;
       };
