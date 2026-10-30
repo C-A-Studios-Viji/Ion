@@ -4,7 +4,7 @@ const ts=require('typescript');const THREE=require('three');
 const root=path.resolve(__dirname,'..');
 
 // Runs the actual game closures with a renderer stub: no GPU or browser needed.
-function gameHarness(authorized=true){
+function gameHarness(authorized=true,network=null){
   const refs=[];let effect,frame,now=0,randomRoll=.5;const listeners=new Map();const saved=new Map();const cache=new Map();
   const canvas={dataset:{},addEventListener(){},requestPointerLock(){return Promise.resolve();}};
   const react={useRef(value){const ref={current:refs.length===0?canvas:value};refs.push(ref);return ref;},useState(value){return [value,()=>{}];},useEffect(fn){effect=fn;}};
@@ -18,9 +18,10 @@ function gameHarness(authorized=true){
     const context={module,exports:module.exports,console,URL,Map,Set,Math:Object.assign(Object.create(Math),{random:()=>randomRoll}),
       crypto:require('node:crypto').webcrypto,TextEncoder,Intl,Date,performance:{now:()=>now},requestAnimationFrame(fn){frame=fn;return 1;},cancelAnimationFrame(){},
       localStorage:{getItem:k=>saved.get(k)??null,setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},
-      window:{innerWidth:1280,innerHeight:720,devicePixelRatio:1,matchMedia:()=>({matches:true}),addEventListener(name,fn){listeners.set(name,fn);},removeEventListener(){},setTimeout(){return 1;}},
+      window:{location:{href:'https://c-a-studios-viji.github.io/Ion/'},innerWidth:1280,innerHeight:720,devicePixelRatio:1,matchMedia:()=>({matches:true}),addEventListener(name,fn){listeners.set(name,fn);},removeEventListener(){},setTimeout(){return 1;}},
       document:{body:{dataset:{}},pointerLockElement:null,addEventListener(){},removeEventListener(){},exitPointerLock(){}},
       require(id){
+        if(id==='./multiplayer'&&network){const actual=load(path.join(root,'app/multiplayer.ts'));return {...actual,PartyLink:network};}
         if(id==='react')return react;if(id==='three')return {...THREE,WebGLRenderer:Renderer};
         if(id==='./modelAssets')return {ModelAssets:Assets,animateModel(){},disposeModel(){}};
         if(id==='./horrorAudio')return {HorrorAudio:class{play(){return false;}}};
@@ -35,7 +36,15 @@ function gameHarness(authorized=true){
   const enter=(room,chaseState=null)=>{
     runtime.room=room;runtime.checkpoint=null;saved.set('ion-checkpoint',JSON.stringify({room,chaseState,paradoxWorld:runtime.paradoxWorld,ammo:6,battery:100,crystals:{malachite:0,amethyst:0,quartz:0,obsidian:0,citrine:0,fluorite:0,corrupted:0},discovered:[],gunInfusion:null,lightInfusion:null,accessKeys:10,maxAmmo:8}));act.restartCheckpoint();act.confirmBoons();
   };
-  const useAt=object=>{runtime.player.copy(object.position).add(new THREE.Vector3(0,1.65,0));step();act.interact();};
+  const useAt=object=>{
+    runtime.player.copy(object.position).add(new THREE.Vector3(0,1.65,0));step(.3);act.interact();
+    // Interact through the actual pickaxe animation until a deposit breaks.
+    for(let i=0;i<3;i++){
+      const pickup=runtime.pickups.find(p=>p.object===object),station=runtime.stations.find(v=>v.object===object);
+      if(!(pickup&&(pickup.kind==='crystal'||object.userData.sealedCapsule))&&!(station?.kind==='resonator'&&!station.activated))break;
+      step(.3);act.interact();
+    }
+  };
   return {runtime,act,step,enter,useAt,load,saved,listeners,screen:()=>refs[3].current,setRandom:value=>{randomRoll=value;}};
 }
 
@@ -246,7 +255,7 @@ test('Pers Hub guarantees Citrine and Obsidian specimens',async()=>{
   assert(crystals.includes('citrine'));assert(crystals.includes('obsidian'));
 });
 
-test('cabinet loot is collected once, persists, and bottles scoop blood into a fifty-door skip',async()=>{
+test('cabinet loot is collected once, persists, and bottles scoop blood and four Sáng vials are required for a fifty-door skip',async()=>{
  const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.enter(10);
  const r=h.runtime;r.enemies.forEach(e=>e.alive=false);
  const cabinet=r.stations.find(s=>s.kind==='cabinet');assert(cabinet);
@@ -256,9 +265,9 @@ test('cabinet loot is collected once, persists, and bottles scoop blood into a f
  h.act.saveRun();assert.equal(h.load(path.join(root,'app/progression.ts')).readRunSlots({getItem:k=>h.saved.get(k)??null})[0].state.openedCabinets.length,1);
  const pool=r.stations.find(s=>s.kind==='blood');assert(pool);r.player.copy(pool.object.position).setY(1.65);
  h.act.useItem('bottle');assert.equal(r.inventory.bottle,0);assert.equal(r.inventory.sang,1);
- h.act.useItem('sang');assert.equal(r.room,60);assert.equal(r.inventory.sang,0);
- r.inventory.sang=1;r.paradoxWorld=true;h.act.useItem('sang');assert.equal(r.room,110);assert.equal(r.paradoxWorld,true);
- r.ascendedWorld=true;r.ascendedDoor=3;r.ascendedFromParadox=false;r.ascendedOriginRoom=10;r.paradoxWorld=false;r.inventory.sang=1;
+ h.act.useItem('sang');assert.equal(r.room,10);assert.equal(r.inventory.sang,1);r.inventory.sang=4;h.act.useItem('sang');assert.equal(r.room,60);assert.equal(r.inventory.sang,0);
+ r.inventory.sang=4;r.paradoxWorld=true;h.act.useItem('sang');assert.equal(r.room,110);assert.equal(r.paradoxWorld,true);
+ r.ascendedWorld=true;r.ascendedDoor=3;r.ascendedFromParadox=false;r.ascendedOriginRoom=10;r.paradoxWorld=false;r.inventory.sang=4;
  h.act.useItem('sang');assert.equal(r.ascendedWorld,false);assert.equal(r.room,30);
 });
 
@@ -269,7 +278,7 @@ test('shielded resonators require reusable protection and their room cabinet sup
  assert(shielded);const r=h.runtime;r.enemies.forEach(e=>e.alive=false);
  r.nearest={kind:'station',index:r.stations.indexOf(shielded)};h.act.interact();assert.equal(shielded.activated,false);
  const cabinet=r.stations.find(s=>s.kind==='cabinet');assert.equal(cabinet.object.userData.loot.resonationShield,1);
- h.useAt(cabinet.object);r.nearest={kind:'station',index:r.stations.indexOf(shielded)};h.act.interact();
+ h.useAt(cabinet.object);h.useAt(shielded.object);
  assert.equal(shielded.activated,true);assert.equal(r.inventory.resonationShield,1);
 });
 
@@ -463,7 +472,7 @@ test('cave floors have dense uneven cosmetic rocks without adding movement colli
  assert.equal(detail.userData.cosmeticOnly,true);
  const skin=detail.getObjectByName('uneven-cave-skin');let low=99,high=-99;
  for(let i=0;i<skin.geometry.attributes.position.count;i++){const y=skin.geometry.attributes.position.getY(i);low=Math.min(low,y);high=Math.max(high,y);}
- assert(high-low>.1);
+ assert(high-low>.45);
  const matrix=new THREE.Matrix4(),position=new THREE.Vector3(),rotation=new THREE.Quaternion(),scale=new THREE.Vector3();let rocks=0;
  detail.children.filter(o=>o instanceof THREE.InstancedMesh).forEach(o=>{
   rocks+=o.count;
@@ -476,4 +485,55 @@ test('cave floors have dense uneven cosmetic rocks without adding movement colli
  h.runtime.enemies=[];h.runtime.hazards=[];h.runtime.grinIncoming=false;h.runtime.noiseActive=false;
  h.runtime.keysDown.add('KeyW');
  for(let i=0;i<80;i++){h.step(.05);assert(Math.abs(h.runtime.player.y-(types.roomFloor(h.runtime.layout,h.runtime.roomLength,h.runtime.player.z)+1.65))<.001);}
+});
+
+test('pickaxe strikes mine deposits without ammo, Sáng upgrades it, and partial mining survives saves',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(2);const r=h.runtime;r.enemies=[];r.hazards=[];r.noiseActive=false;
+ const p=r.pickups.find(p=>p.kind==='crystal');assert(p);const count=r.crystals[p.crystal],ammo=r.ammo;
+ r.player.copy(p.object.position).add(new THREE.Vector3(0,1.65,0));h.step(.3);r.nearest={kind:'pickup',index:r.pickups.indexOf(p)};h.act.fire();
+ assert.equal(r.crystals[p.crystal],count);assert.equal(p.object.userData.mineHits,1);assert.equal(r.ammo,ammo);
+ h.act.saveRun();h.act.loadSlot(0);h.act.confirmBoons();const restored=r.pickups.find(v=>v.object.userData.pickupId===p.object.userData.pickupId);assert.equal(restored.object.userData.mineHits,1);
+ h.useAt(restored.object);assert.equal(r.crystals[p.crystal],count+1);assert.equal(r.ammo,ammo);
+ r.inventory.sang=2;h.act.upgradePickaxe();h.act.upgradePickaxe();assert.equal(r.pickaxeLevel,2);assert.equal(r.inventory.sang,0);h.act.upgradePickaxe();assert.equal(r.pickaxeLevel,2);
+ const other=r.pickups.find(p=>p.kind==='crystal');assert(other);r.player.copy(other.object.position).add(new THREE.Vector3(0,1.65,0));h.step(.3);r.nearest={kind:'pickup',index:r.pickups.indexOf(other)};h.act.fire();assert(!r.pickups.includes(other));assert.equal(r.ammo,ammo);
+ h.act.saveRun();h.act.loadSlot(0);h.act.confirmBoons();assert.equal(r.pickaxeLevel,2);
+});
+
+test('each Ascended door supplies one shard, rare glue repairs it once, and four vials cap at the route exit',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.enter(10);const r=h.runtime;r.inventory.goldBar=1;h.act.useItem('goldBar');
+ assert(r.ascendedWorld);assert.equal(r.pickups.filter(p=>p.kind==='glassShard').length,1);
+ h.useAt(r.pickups.find(p=>p.kind==='glassShard').object);assert.equal(r.inventory.glassShard,1);
+ h.act.repairJar();assert.equal(r.inventory.bottle,0);r.inventory.glue=1;h.act.repairJar();assert.equal(r.inventory.glue,0);assert.equal(r.inventory.glassShard,0);assert.equal(r.inventory.bottle,1);h.act.repairJar();assert.equal(r.inventory.bottle,1);
+ r.enemies=[];r.hazards=[];r.noiseActive=false;r.doorProgress=1;r.player.set(0,1.65,-r.roomLength/2-1);h.step(1);assert.equal(r.ascendedDoor,2);assert.equal(r.pickups.filter(p=>p.kind==='glassShard').length,1);
+ const rules=h.load(path.join(root,'app/mining.ts'));assert.equal(rules.GLUE_CHANCE,.04);assert.equal(rules.sangSkipTarget(370,0,false,'redox'),400);assert.equal(rules.sangSkipTarget(180,0,false,'none'),200);assert.equal(rules.sangSkipTarget(1,10,true,'ascended'),50);
+ r.inventory.sang=3;h.act.useItem('sang');assert.equal(r.ascendedDoor,2);assert.equal(r.inventory.sang,3);r.inventory.sang=4;h.act.useItem('sang');assert.equal(r.ascendedWorld,false);assert.equal(r.inventory.sang,0);
+});
+
+test('third person uses an articulated customised survivor, saves appearance, and preserves walking height',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.enter(2);const r=h.runtime;r.enemies=[];r.hazards=[];r.noiseActive=false;
+ const appearance={suit:'#643f37',trim:'#b5dd77',skin:'#6b3827',visor:'#a9d7ee',helmet:'open',build:'broad',backpack:false,pattern:'hazard'};
+ h.act.customize(appearance);assert.equal(JSON.parse(h.saved.get('ion-appearance-v1')).suit,appearance.suit);assert.equal(r.localAvatar.userData.limbs.length,4);
+ h.listeners.get('keydown')({code:'KeyV',repeat:false,target:null});h.step();assert(r.thirdPerson);assert(r.localAvatar.visible);assert(r.camera.position.distanceTo(r.player)>1);assert.equal(r.gunModel.visible,false);
+ r.keysDown.add('KeyW');h.step(.4);r.keysDown.clear();assert.equal(r.player.y,1.65);assert(r.localAvatar.position.distanceTo(r.player)<.01);
+ h.act.toggleView();h.step();assert.equal(r.localAvatar.visible,false);assert(r.camera.position.distanceTo(r.player)<.1);
+ const {cleanAppearance}=h.load(path.join(root,'app/playerModel.ts'));assert.equal(cleanAppearance({suit:'invalid',helmet:'x'}).suit,'#223b38');
+});
+
+
+test('an invite guest enters the host run directly, exchanges appearance, and follows room changes',async()=>{
+ const hosts=new Map();let next=0;
+ class Link {
+  role=null;code='';playerName='Survivor'+(++next);connection=null;other=null;
+  onMessage=()=>{};onStatus=()=>{};onConnect=()=>{};onDisconnect=()=>{};
+  async host(){this.code='a'.repeat(32);this.role='host';hosts.set(this.code,this);return this.code;}
+  async join(token){const h=hosts.get(token);assert(h);this.role='guest';this.code=token;this.other=h;h.other=this;this.connection=h.connection={open:true};h.onConnect();this.onConnect();}
+  send(message){if(this.connection?.open)queueMicrotask(()=>this.other.onMessage(structuredClone(message)));}
+  close(){if(this.role==='host')hosts.delete(this.code);this.role=null;this.code='';this.connection=null;}
+ }
+ const host=gameHarness(true,Link),guest=gameHarness(true,Link);await Promise.resolve();await Promise.resolve();
+ host.enter(42);host.runtime.enemies=[];host.runtime.hazards=[];host.runtime.noiseActive=false;
+ host.act.customize({...host.runtime.appearance,suit:'#123456'});await host.act.hostParty();
+ await guest.act.joinParty('https://c-a-studios-viji.github.io/Ion/?join='+ 'a'.repeat(32));await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(guest.runtime.room,42);assert.equal(guest.runtime.running,true);assert.equal(guest.screen(),null);assert.equal(guest.runtime.remotePose.appearance.suit,'#123456');
+ host.enter(43);await new Promise(resolve=>setImmediate(resolve));assert.equal(guest.runtime.room,43);assert.equal(guest.screen(),null);assert.equal(guest.runtime.running,true);
 });

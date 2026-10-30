@@ -7,7 +7,7 @@ const ts=require('typescript');
 const {EventEmitter}=require('node:events');
 const {webcrypto}=require('node:crypto');
 
-test('five-digit host and guest exchange room state and live actions over a data connection',async()=>{
+test('link invites and legacy peers exchange room state, appearance and live actions over a data connection',async()=>{
   const peers=new Map(),peerOptions=[];
   class Connection extends EventEmitter{
     open=false;
@@ -27,13 +27,21 @@ test('five-digit host and guest exchange room state and live actions over a data
   const file=path.resolve(__dirname,'../app/multiplayer.ts');
   const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
   const module={exports:{}};
-  vm.runInNewContext(code,{module,exports:module.exports,require:()=>Peer,crypto:webcrypto,setTimeout,clearTimeout,console,queueMicrotask});
-  const {PartyLink,partyPeerId,validPartyCode,hasTripleDigit,randomPlayerName,secretSignal}=module.exports;
+  vm.runInNewContext(code,{module,exports:module.exports,require:()=>Peer,crypto:webcrypto,URL,setTimeout,clearTimeout,console,queueMicrotask});
+  const {PartyLink,partyPeerId,validPartyCode,hasTripleDigit,randomPlayerName,secretSignal,parsePartyInvite,partyInviteUrl,randomInviteToken}=module.exports;
   assert.equal(validPartyCode('12345'),true);assert.equal(validPartyCode('1234'),false);
   assert.equal(hasTripleDigit('11311'),true);assert.equal(hasTripleDigit('12345'),false);
   assert.equal(randomPlayerName(()=>0),'ScoutSalmon');
   assert.equal(secretSignal('xxoop'),'skip-pers');assert.equal(secretSignal('C9P98H'),'skip-pers');assert.equal(secretSignal('1DEV1'),'one-dev');assert.equal(secretSignal('NOPE'),null);
   assert.equal(partyPeerId('12345'),'ion-facility-12345');
+  const token=randomInviteToken();assert.match(token,/^[a-f0-9]{32}$/);
+  const invite=partyInviteUrl('https://c-a-studios-viji.github.io/Ion/?other=x#old',token);
+  assert.equal(parsePartyInvite(invite),token);assert.equal(new URL(invite).pathname,'/Ion/');assert.equal(new URL(invite).searchParams.has('other'),false);
+  assert.equal(parsePartyInvite('https://example.com/?join=bad'),null);assert.equal(parsePartyInvite('javascript:alert(1)'),null);
+  const tokenHost=new PartyLink(),tokenGuest=new PartyLink();let tokenMessage;
+  tokenGuest.onMessage=m=>{tokenMessage=m;};tokenHost.onConnect=()=>tokenHost.send({type:'hello',state:{room:42},pose:{name:'LinkSurvivor',appearance:{suit:'#123456'}}});
+  await tokenHost.host(token);await tokenGuest.join(parsePartyInvite(invite));await new Promise(resolve=>setImmediate(resolve));assert.equal(tokenMessage.state.room,42);assert.equal(tokenMessage.pose.appearance.suit,'#123456');tokenGuest.close();tokenHost.close();
+  peerOptions.length=0;
   const host=new PartyLink(),guest=new PartyLink();let receivedByGuest,receivedByHost;
   guest.onMessage=message=>{receivedByGuest=message;};host.onMessage=message=>{receivedByHost=message;};
   host.onConnect=()=>host.send({type:'hello',state:{room:25},pose:{x:0,y:0,z:1,yaw:0,light:true,dead:false,room:25,name:host.playerName}});
