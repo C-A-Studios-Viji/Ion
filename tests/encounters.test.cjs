@@ -474,9 +474,9 @@ test('cave floors have dense uneven cosmetic rocks without adding movement colli
  for(let i=0;i<skin.geometry.attributes.position.count;i++){const y=skin.geometry.attributes.position.getY(i);low=Math.min(low,y);high=Math.max(high,y);}
  assert(high-low>.45);
  const matrix=new THREE.Matrix4(),position=new THREE.Vector3(),rotation=new THREE.Quaternion(),scale=new THREE.Vector3();let rocks=0;
- detail.children.filter(o=>o instanceof THREE.InstancedMesh).forEach(o=>{
-  rocks+=o.count;
-  for(let i=0;i<o.count;i++){o.getMatrixAt(i,matrix);matrix.decompose(position,rotation,scale);assert(position.distanceTo(clear[0])>1.15);}
+ detail.children.filter(o=>o.userData.rockCount).forEach(o=>{
+  rocks+=o.userData.rockCount;
+  for(const center of o.userData.rockCenters)assert(new THREE.Vector3(...center).distanceTo(clear[0])>1.15);
  });assert(rocks>250);
  const obstacles=h.runtime.obstacles.length;
  addRockyCaveFloor(h.runtime.roomGroup,18,25,'standard',1,[]);
@@ -611,4 +611,16 @@ test('all sixteen creatures gain detailed anatomy without losing animation or di
   animateMonster(model,1,true);animateMonster(model,3,false);model.traverse(n=>{assert(n.rotation.toArray().slice(0,3).every(Number.isFinite));});
  }
  assert.equal(styles.size,5);
+});
+
+
+test('cave floor uses ordinary baked meshes and stock materials independently of graphics mode',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.enter(2);
+ const floor=h.runtime.roomGroup.getObjectByName('cave-floor-decoration');assert(floor);assert.equal(floor.children.length,3);
+ let vertices=0;
+ floor.children.forEach(mesh=>{assert(mesh instanceof THREE.Mesh);assert(!(mesh instanceof THREE.InstancedMesh));assert(mesh.material instanceof THREE.MeshStandardMaterial);assert.equal(mesh.material.onBeforeCompile,THREE.Material.prototype.onBeforeCompile);assert(mesh.material.vertexColors);assert(mesh.material.emissiveIntensity>0);for(const name of ['position','normal','color']){const a=mesh.geometry.attributes[name];assert(a);for(const value of a.array)assert(Number.isFinite(value));}vertices+=mesh.geometry.attributes.position.count;});
+ assert(vertices<100000);
+ h.act.toggleGraphics();assert.equal(h.runtime.roomGroup.getObjectByName('cave-floor-decoration'),floor);h.step();assert(floor.visible);
+ const {addRockyCaveFloor}=h.load(path.join(root,'app/caveFloor.ts'));
+ for(const type of ['duplex','multifloor','basement']){const g=new THREE.Group(),detail=addRockyCaveFloor(g,18,30,type,7,[]);assert(detail.userData.layoutGeometry);assert(detail.getObjectByName('cave-rock-slabs'));}
 });
