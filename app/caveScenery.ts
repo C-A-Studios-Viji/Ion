@@ -14,7 +14,7 @@ export function fractureGeometry(detail=1){
 }
 /** Visual shell stays behind the playable wall boundary. No gameplay colliders. */
 export function addCaveScenery(group:THREE.Group,w:number,l:number,h:number,type:RoomType,seed:number){
- const root=new THREE.Group();root.name='cinematic-cave-shell';root.userData.cosmeticOnly=true;
+ const root=new THREE.Group();root.name='cinematic-cave-shell';root.userData.cosmeticOnly=true;root.userData.layoutGeometry=true;
  const rand=rng(seed*41+17),cols=Math.ceil(l/.7),rows=Math.ceil(h/.65);
  for(const side of [-1,1]){
   const p:number[]=[],idx:number[]=[];
@@ -51,7 +51,7 @@ export function addCaveScenery(group:THREE.Group,w:number,l:number,h:number,type
  group.add(root);return root;
 }
 export function addIndustrialScenery(group:THREE.Group,w:number,l:number,h:number,seed:number,cave=false){
- const root=new THREE.Group();root.name='industrial-service-details';root.userData.cosmeticOnly=true;
+ const root=new THREE.Group();root.name='industrial-service-details';root.userData.cosmeticOnly=true;root.userData.layoutGeometry=true;
  const steel=makeAgedMetal(),rubber=new THREE.MeshStandardMaterial({color:0x171a16,roughness:.86});
  // Suspended service cables and wall brackets frame the same door as the reference.
  for(const side of [-1,1])for(let wire=0;wire<3;wire++){

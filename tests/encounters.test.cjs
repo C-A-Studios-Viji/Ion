@@ -540,7 +540,7 @@ test('an invite guest enters the host run directly, exchanges appearance, and fo
 
 test('cinematic cave shells face inward, preserve the exit and stay within geometry budgets',()=>{
  const h=gameHarness(),{addCaveScenery}=h.load(path.join(root,'app/caveScenery.ts'));
- const group=new THREE.Group(),detail=addCaveScenery(group,18,26,7,'standard',2);assert(detail.userData.cosmeticOnly);
+ const group=new THREE.Group(),detail=addCaveScenery(group,18,26,7,'standard',2);assert(detail.userData.cosmeticOnly);assert(detail.userData.layoutGeometry);
  const walls=detail.children.filter(o=>o.name==='folded-rock-wall');assert.equal(walls.length,2);
  walls.forEach((wall,i)=>{const normal=wall.geometry.attributes.normal;let x=0;for(let n=0;n<normal.count;n++)x+=normal.getX(n);assert(i===0?x>0:x<0);});
  const vault=detail.getObjectByName('broken-cave-vault');assert(vault);const normals=vault.geometry.attributes.normal;for(let i=0;i<normals.count;i++)assert(normals.getY(i)<-.6);
