@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import {makeRockMaterial} from './rockMaterials';
+import {fractureGeometry} from './caveScenery';
 import {roomFloor,type RoomType} from './roomTypes';
 /** Cosmetic terrain only. Never register these meshes in movement colliders. */
 export function addRockyCaveFloor(group:THREE.Group,width:number,length:number,type:RoomType,seed:number,clearPoints:THREE.Vector3[]){
@@ -11,14 +13,14 @@ export function addRockyCaveFloor(group:THREE.Group,width:number,length:number,t
  for(let i=0;i<positions.count;i++){
   const x=positions.getX(i),z=-positions.getY(i);
   const fade=isClear(x,z,.1)||Math.abs(z)>length/2-3?.28:1;
-  positions.setZ(i,roomFloor(type,length,z)+.018+fade*(.12+rand()*.42 + .14*Math.sin(x*2.1)*Math.cos(z*1.7)));
+  positions.setZ(i,roomFloor(type,length,z)+.018+fade*(.16+rand()*.25 + .20*Math.abs(Math.sin(x*1.6+z*.7))+.10*Math.cos(z*3.1+x*.8)));
  }
  skin.rotateX(-Math.PI/2);skin.computeVertexNormals();
- const surface=new THREE.Mesh(skin,new THREE.MeshStandardMaterial({color:0x566054,emissive:0x263026,emissiveIntensity:.16,roughness:.98,metalness:.04,flatShading:true}));surface.receiveShadow=true;surface.name='uneven-cave-skin';detail.add(surface);
+ const surface=new THREE.Mesh(skin,makeRockMaterial('ground'));surface.receiveShadow=true;surface.name='uneven-cave-skin';detail.add(surface);
  // Two instanced draws cover loose gravel and larger broken slabs.
  for(const large of [false,true]){
   const matrices:THREE.Matrix4[]=[],colours:THREE.Color[]=[];
-  const attempts=Math.min(large?320:1100,Math.ceil(width*length*(large?.35:1.4)));
+  const attempts=Math.min(large?280:900,Math.ceil(width*length*(large?.35:1.4)));
   for(let i=0;i<attempts;i++){
    const x=(rand()-.5)*(width-1.8),z=(rand()-.5)*(length-2);
    const radius=large?.38+rand()*.65:.10+rand()*.26;
@@ -27,10 +29,10 @@ export function addRockyCaveFloor(group:THREE.Group,width:number,length:number,t
    const sy=(large?.28+rand()*.48:.09+rand()*.18)*(central?.65:1);
    const q=new THREE.Quaternion().setFromEuler(new THREE.Euler((rand()-.5)*.35,rand()*Math.PI*2,(rand()-.5)*.35));
    matrices.push(new THREE.Matrix4().compose(new THREE.Vector3(x,roomFloor(type,length,z)+sy*.5,z),q,new THREE.Vector3(radius,sy,radius*(.7+rand()*.8))));
-   colours.push(new THREE.Color().setHSL(.55+rand()*.04,.07+rand()*.08,.27+rand()*.16));
+   colours.push(new THREE.Color().setHSL(.55+rand()*.04,.07+rand()*.08,.6+rand()*.22));
   }
   if(!matrices.length)continue;
-  const rubble=new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1,large?1:0),new THREE.MeshStandardMaterial({roughness:.94,metalness:.04,emissive:0x263026,emissiveIntensity:.12,flatShading:true}),matrices.length);
+  const rubble=new THREE.InstancedMesh(fractureGeometry(large?1:0),makeRockMaterial('slab'),matrices.length);
   matrices.forEach((matrix,i)=>{rubble.setMatrixAt(i,matrix);rubble.setColorAt(i,colours[i]);});
   rubble.name=large?'cave-rock-slabs':'cave-loose-gravel';rubble.receiveShadow=true;rubble.castShadow=large;rubble.computeBoundingSphere();detail.add(rubble);
  }

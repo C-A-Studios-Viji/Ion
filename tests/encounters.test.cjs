@@ -537,3 +537,43 @@ test('an invite guest enters the host run directly, exchanges appearance, and fo
  assert.equal(guest.runtime.room,42);assert.equal(guest.runtime.running,true);assert.equal(guest.screen(),null);assert.equal(guest.runtime.remotePose.appearance.suit,'#123456');
  host.enter(43);await new Promise(resolve=>setImmediate(resolve));assert.equal(guest.runtime.room,43);assert.equal(guest.screen(),null);assert.equal(guest.runtime.running,true);
 });
+
+test('cinematic cave shells face inward, preserve the exit and stay within geometry budgets',()=>{
+ const h=gameHarness(),{addCaveScenery}=h.load(path.join(root,'app/caveScenery.ts'));
+ const group=new THREE.Group(),detail=addCaveScenery(group,18,26,7,'standard',2);assert(detail.userData.cosmeticOnly);
+ const walls=detail.children.filter(o=>o.name==='folded-rock-wall');assert.equal(walls.length,2);
+ walls.forEach((wall,i)=>{const normal=wall.geometry.attributes.normal;let x=0;for(let n=0;n<normal.count;n++)x+=normal.getX(n);assert(i===0?x>0:x<0);});
+ const vault=detail.getObjectByName('broken-cave-vault');assert(vault);const normals=vault.geometry.attributes.normal;for(let i=0;i<normals.count;i++)assert(normals.getY(i)<-.6);
+ let vertices=0,instances=0;
+ detail.traverse(o=>{if(o.isMesh){vertices+=o.geometry.attributes.position.count;for(const v of o.geometry.attributes.position.array)assert(Number.isFinite(v));if(o.isInstancedMesh)instances+=o.count;}});
+ assert(vertices<24000);assert(instances>80&&instances<500);
+ const obstacles=h.runtime.obstacles.length;addCaveScenery(h.runtime.roomGroup,18,26,7,'standard',2);assert.equal(h.runtime.obstacles.length,obstacles);
+});
+
+test('mineral geodes have finite faceted gradients, matte host rock and bounded instanced growth',()=>{
+ const h=gameHarness(),{createGeode}=h.load(path.join(root,'app/mineralScenery.ts'));
+ const geode=createGeode(0x26bb77,1,7,true);assert(geode.userData.geode);
+ const growth=geode.getObjectByName('faceted-mineral-growth');assert(growth.isInstancedMesh);assert.equal(growth.count,15);
+ assert.equal(growth.material.metalness,0);assert(growth.material.emissiveIntensity<.04);
+ const colors=growth.geometry.attributes.color;const unique=new Set();for(let i=0;i<colors.count;i++){unique.add([colors.getX(i),colors.getY(i),colors.getZ(i)].join(','));}assert(unique.size>6);
+ const box=new THREE.Box3().setFromObject(geode);assert(box.max.y>.4&&box.max.y<2);assert(box.min.y>-.2);
+});
+
+test('procedural rock shaders supply world-space bump, wet roughness and instancing transforms',()=>{
+ const h=gameHarness(),{makeRockMaterial}=h.load(path.join(root,'app/rockMaterials.ts'));
+ const material=makeRockMaterial(),shader={vertexShader:THREE.ShaderLib.standard.vertexShader,fragmentShader:THREE.ShaderLib.standard.fragmentShader,uniforms:{}};
+ material.onBeforeCompile(shader,{});
+ assert(shader.vertexShader.includes('instanceMatrix*ionWorld'));
+ for(const token of ['ionRockPosition','ionRelief','ionDamp','ionGrain','roughnessFactor=clamp','dFdx(-vViewPosition)'])assert(shader.fragmentShader.includes(token));
+ assert(shader.fragmentShader.indexOf('float ionDamp=')<shader.fragmentShader.indexOf('roughnessFactor=clamp'));
+ assert(shader.fragmentShader.indexOf('vec3 ionP=')<shader.fragmentShader.indexOf('float ionRelief='));
+ assert(material.metalness===0&&material.roughness>.8);
+});
+
+test('cinematic rendering has a GPU-free fallback and graphics mode survives a session toggle',()=>{
+ const h=gameHarness(),{CinematicRenderer,cinematicExposure}=h.load(path.join(root,'app/cinematicRenderer.ts'));
+ let renders=0;const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(),renderer={render(){renders++;}};
+ const pipeline=new CinematicRenderer(renderer,scene,camera,800,600);pipeline.render();pipeline.setEnabled(false);pipeline.resize(400,300);pipeline.render();pipeline.dispose();assert.equal(renders,2);
+ h.act.toggleGraphics();assert.equal(h.saved.get('ion-cinematic-graphics'),'off');h.act.toggleGraphics();assert.equal(h.saved.get('ion-cinematic-graphics'),'on');
+ assert(cinematicExposure(false,false,false,6)>.7);assert(cinematicExposure(false,false,true,6)>=.9);
+});

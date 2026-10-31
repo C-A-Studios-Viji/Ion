@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import {CinematicRenderer,cinematicExposure} from './cinematicRenderer';
+import {makeRockMaterial,makeAgedMetal} from './rockMaterials';
+import {addCaveScenery,addIndustrialScenery} from './caveScenery';
+import {createGeode} from './mineralScenery';
 import { addRockyCaveFloor } from "./caveFloor";
 import { ModelAssets, animateModel, disposeModel } from "./modelAssets";
 import { createMonster, animateMonster, MONSTER_NAMES, MONSTER_COLORS, type MonsterKind } from "./monsterModels";
@@ -367,6 +371,7 @@ type ActionApi = {
   buyBasdino: () => void;
   openInventory: () => void;
   useItem: (key: ItemKey) => void;
+  toggleGraphics: () => void;
   toggleView: () => void;
   upgradePickaxe: () => void;
   repairJar: () => void;
@@ -820,6 +825,7 @@ export default function IonGame() {
   const [appearance,setAppearance]=useState<Appearance>(DEFAULT_APPEARANCE);
   const [inviteLink,setInviteLink]=useState("");
   const [inviteCopied,setInviteCopied]=useState(false);
+  const [cinematicGraphics,setCinematicGraphics]=useState(true);
   const customizeReturn=useRef<Screen>("start");
 
   const showScreen = (value: Screen) => {
@@ -851,7 +857,7 @@ export default function IonGame() {
       setWebglUnavailable(true);
       return;
     }
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -863,6 +869,10 @@ export default function IonGame() {
     scene.fog = new THREE.FogExp2(0x03090b, 0.047);
     const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 100);
     scene.add(camera);
+    const cinematic=new CinematicRenderer(renderer,scene,camera,window.innerWidth,window.innerHeight);
+    let graphicsEnabled=true;
+    try{graphicsEnabled=localStorage.getItem('ion-cinematic-graphics')!=='off';}catch{/* defaults */}
+    cinematic.setEnabled(graphicsEnabled);setCinematicGraphics(graphicsEnabled);
     const roomGroup = new THREE.Group();
     scene.add(roomGroup);
     const flashTarget = new THREE.Object3D();
@@ -870,7 +880,8 @@ export default function IonGame() {
     camera.add(flashTarget);
     const flashlight = new THREE.SpotLight(0xe5f9ff, 92, 31, 0.44, 0.64, 1.35);
     flashlight.castShadow = true;
-    flashlight.shadow.mapSize.set(768, 768);
+    flashlight.shadow.mapSize.set(1024,1024);
+    flashlight.shadow.normalBias=.025;flashlight.shadow.bias=-.0001;
     flashlight.position.set(0.08, -0.08, 0);
     flashlight.target = flashTarget;
     camera.add(flashlight);
@@ -1014,8 +1025,7 @@ export default function IonGame() {
       }
     };
 
-    const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x10171a, roughness: 0.62, metalness: 0.28 });
-    const caveMaterial = new THREE.MeshStandardMaterial({ color: 0x101817, roughness: 0.72, metalness: 0.12 });
+    const baseMaterial = makeAgedMetal();
     const blackMaterial = new THREE.MeshStandardMaterial({ color: 0x020205, roughness: 0.18, metalness: 0.62 });
 
     function updateHud(force = false) {
@@ -1128,53 +1138,10 @@ export default function IonGame() {
     }
 
     function createCrystal(key: CrystalKey, size = 1, collectible = false) {
-      const group = new THREE.Group();
-      const info = CRYSTALS[key];
-      const imported = assets.create(`mineral_${key}` as import("./modelAssets").ModelKey, {
-        height: size * (collectible ? 0.72 : 1.15), tint: info.color,
-        emissive: key === "obsidian" ? 0.18 : key === "corrupted" ? 1.1 : 0.48,
-      });
-      if (imported) { imported.userData.crystal = key; return imported; }
-      const material = new THREE.MeshPhysicalMaterial({ color: info.color, emissive: info.color,
-        emissiveIntensity: key === "obsidian" ? 0.18 : key === "corrupted" ? 1.4 : 0.52,
-        roughness: key === "malachite" ? 0.48 : 0.18, metalness: key === "obsidian" ? 0.68 : 0.08,
-        transmission: key === "quartz" || key === "amethyst" ? 0.2 : 0, thickness: 0.7,
-        transparent: key === "quartz" || key === "amethyst", opacity: key === "quartz" ? 0.78 : 0.94 });
-      const rand = seeded(key.length * 91 + Math.floor(size * 17));
-      if (key === "malachite") {
-        for (let i = 0; i < 13; i += 1) {
-          const radius = (0.14 + rand() * 0.24) * size;
-          const sphere = new THREE.Mesh(new THREE.IcosahedronGeometry(radius, 2), material);
-          sphere.position.set((rand() - 0.5) * size, rand() * 0.72 * size, (rand() - 0.5) * size);
-          sphere.scale.y = 0.72 + rand() * 0.8;
-          sphere.castShadow = true;
-          group.add(sphere);
-        }
-      } else if (key === "fluorite") {
-        for (let i = 0; i < 5; i += 1) {
-          const edge = size * (0.28 + rand() * 0.32);
-          const cube = new THREE.Mesh(new RoundedBoxGeometry(edge, edge, edge, 3, edge*.1), material);
-          cube.position.set((rand() - 0.5) * size, rand() * 0.6 * size, (rand() - 0.5) * size);
-          cube.rotation.set(rand(), rand(), rand()); cube.castShadow = true; group.add(cube);
-        }
-      } else {
-        const shards = key === "obsidian" ? 6 : 8;
-        for (let i = 0; i < shards; i += 1) {
-          const height = size * (0.45 + rand() * 0.9);
-          const radius = size * (0.09 + rand() * 0.14);
-          const shard = new THREE.Mesh(new THREE.ConeGeometry(radius, height, key === "obsidian" ? 5 : 6), material);
-          shard.position.set((rand() - 0.5) * size, height * 0.5, (rand() - 0.5) * size);
-          shard.rotation.set((rand() - 0.5) * 0.32, rand() * Math.PI, (rand() - 0.5) * 0.32);
-          shard.castShadow = true; group.add(shard);
-        }
-      }
-      group.traverse(node=>{if(!(node instanceof THREE.Mesh))return;node.geometry.computeBoundingBox();const b=node.geometry.boundingBox!,pos=node.geometry.getAttribute('position'),colors=new Float32Array(pos.count*3);
-        for(let i=0;i<pos.count;i++){const t=(pos.getY(i)-b.min.y)/Math.max(.001,b.max.y-b.min.y);const c=t<.22?new THREE.Color(0x514b40):new THREE.Color(info.color).multiplyScalar(.45).lerp(new THREE.Color(info.color).lerp(new THREE.Color(0xf0e5ff),.5),Math.max(0,(t-.22)/.78));c.toArray(colors,i*3);}node.geometry.setAttribute('color',new THREE.BufferAttribute(colors,3));});
-      material.color.setHex(0xffffff);material.vertexColors=true;material.emissiveIntensity=.12;
-      const matrix=new THREE.Mesh(new THREE.IcosahedronGeometry(size*.43,1),new THREE.MeshStandardMaterial({color:0x514b40,roughness:.97}));matrix.scale.set(1,.36,1);matrix.position.y=.03;group.add(matrix);
-      group.scale.setScalar(collectible ? 0.72 : 1);
-      group.userData.crystal = key;
-      return group;
+      const info=CRYSTALS[key];
+      const specimen=assets.create(`mineral_${key}` as import('./modelAssets').ModelKey,{height:.85,tint:info.color,emissive:.025});
+      const geode=createGeode(info.color,size,key.length*193+Math.floor(size*37),collectible,specimen);
+      geode.userData.crystal=key;return geode;
     }
 
     function createWhirlpool() {
@@ -1376,8 +1343,8 @@ export default function IonGame() {
 
     function buildDoor() {
       const group = new THREE.Group(); group.position.set(0, 0, -runtime.roomLength / 2 + 0.02);
-      const frameMaterial = new THREE.MeshStandardMaterial({ color: 0x151c20, metalness: 0.9, roughness: 0.24 });
-      const panelMaterial = new THREE.MeshStandardMaterial({ color: 0x222a2e, metalness: 0.74, roughness: 0.32 });
+      const frameMaterial=makeAgedMetal();
+      const panelMaterial=makeAgedMetal();
       const glowMaterial = new THREE.MeshStandardMaterial({ color: runtime.doorUnlocked ? 0x25ff9b : 0xff234f,
         emissive: runtime.doorUnlocked ? 0x25ff9b : 0xff234f, emissiveIntensity: 3.2 });
       addMesh(new THREE.BoxGeometry(5.3, 0.35, 0.45), frameMaterial, new THREE.Vector3(0, 4.5, 0), undefined, group);
@@ -1385,7 +1352,7 @@ export default function IonGame() {
       addMesh(new THREE.BoxGeometry(0.35, 4.7, 0.45), frameMaterial, new THREE.Vector3(2.48, 2.2, 0), undefined, group);
       runtime.doorPanels = [-1, 1].map((side) => {
         const panel = assets.create("door", { size: [2.36, 4.1, 0.24], centered: true, tint: 0x47555e }) ?? new THREE.Group();
-        if (!panel.children.length) panel.add(new THREE.Mesh(new THREE.BoxGeometry(2.36, 4.1, 0.24), panelMaterial.clone()));
+        if (!panel.children.length) panel.add(new THREE.Mesh(new THREE.BoxGeometry(2.36, 4.1, 0.24), panelMaterial));
         panel.position.set(side * 1.19, 2.12, 0); group.add(panel); return panel;
       });
       const strip = addMesh(new THREE.BoxGeometry(0.12, 3.35, 0.08), glowMaterial, new THREE.Vector3(0, 2.15, 0.19), undefined, group);
@@ -1522,18 +1489,15 @@ export default function IonGame() {
     }
 
     function addCaveSunlight() {
-      const sun = new THREE.DirectionalLight(0xc8e8ff,1.65);
-      sun.position.set(-runtime.roomWidth*.28,runtime.roomHeight-.25,runtime.roomLength*.2);
-      sun.target.position.set(runtime.roomWidth*.18,0,-runtime.roomLength*.12);
-      sun.castShadow=true; sun.shadow.mapSize.set(1024,1024); sun.shadow.bias=-.001;
-      sun.shadow.camera.left=-16;sun.shadow.camera.right=16;sun.shadow.camera.top=30;sun.shadow.camera.bottom=-30;
-      sun.shadow.camera.far=100;runtime.roomGroup.add(sun,sun.target);
-      for(let i=0;i<3;i++) {
-        const shaft=new THREE.Mesh(new THREE.ConeGeometry(1.8,runtime.roomHeight,32,1,true),new THREE.MeshBasicMaterial({color:i%2?0x3aa9ff:0x9fe8ff,transparent:true,opacity:.035,depthWrite:false,side:THREE.DoubleSide}));
-        shaft.position.set(-2+i*2.2,runtime.roomHeight*.5,runtime.roomLength*.2-i*5);shaft.rotation.z=-.28;runtime.roomGroup.add(shaft);
-        const aperture=new THREE.Mesh(new THREE.TorusGeometry(.6,.08,12,48),new THREE.MeshBasicMaterial({color:0x97e3ff}));
-        aperture.rotation.x=Math.PI/2;aperture.position.set(shaft.position.x-1,runtime.roomHeight-.03,shaft.position.z);runtime.roomGroup.add(aperture);
-      }
+      // Subtle bounced light separates silhouette from black; actual fixtures and
+      // the player's flashlight supply the readable pools of illumination.
+      const bounce=new THREE.DirectionalLight(0x9bbcab,.42);
+      bounce.position.set(-3,runtime.roomHeight,2);runtime.roomGroup.add(bounce);
+      const threshold=new THREE.SpotLight(0xffdfad,90,20,.67,.65,2);
+      threshold.position.set(-2.9,4.3,-runtime.roomLength/2+1.5);threshold.target.position.set(1.5,0,-runtime.roomLength/2+8);
+      threshold.castShadow=true;threshold.shadow.mapSize.set(768,768);threshold.shadow.normalBias=.03;threshold.shadow.bias=-.0002;
+      runtime.roomGroup.add(threshold,threshold.target);
+      const fixture=new THREE.Mesh(new THREE.BoxGeometry(.7,.12,.18),new THREE.MeshStandardMaterial({color:0xffecd1,emissive:0xffdfad,emissiveIntensity:2.5}));fixture.position.copy(threshold.position);runtime.roomGroup.add(fixture);
     }
 
     function addNoiseEncounter() {
@@ -1735,43 +1699,42 @@ export default function IonGame() {
       runtime.roomSpawnTimer = 0.12; runtime.roomEntitySpawned = true; // Warning completion arms the single spawn.
       runtime.verticalVelocity = 0; runtime.grounded = true; runtime.cameraMode = false; runtime.player.set(0, 1.65, runtime.roomLength / 2 - 3.4); runtime.yaw = 0; runtime.pitch = 0;
       const cave = /Caves|Caverns|Tunnels|Nursery|Gallery/.test(runtime.roomName);
-      const corruption = runtime.tier / 7;
-      const fogColor = new THREE.Color().setRGB(0.008 + corruption * 0.035, 0.025 - corruption * 0.012, 0.03 + corruption * 0.025);
-      scene.background = new THREE.Color(runtime.ascendedWorld?0x211603:runtime.paradoxWorld?0x130827:0x020b20);
-      scene.fog = new THREE.FogExp2(runtime.ascendedWorld?0x60420b:runtime.paradoxWorld?0x2f164b:0x081d37, runtime.chaseRoom ? 0.012 : 0.026 + runtime.tier * 0.002);
-      renderer.toneMappingExposure = runtime.ascendedWorld ? 1.04 : runtime.paradoxWorld ? 0.62 : runtime.chaseRoom ? 1.22 : Math.max(0.52, 0.76 - runtime.tier * 0.028);
-      const floorMaterial = cave ? caveMaterial.clone() : baseMaterial.clone(); floorMaterial.color.offsetHSL(0, 0, -runtime.tier * 0.008);
+      const fogColor = new THREE.Color(0x080d0a);
+      scene.background = new THREE.Color(runtime.ascendedWorld?0x211603:runtime.paradoxWorld?0x130827:0x020504);
+      scene.fog = new THREE.FogExp2(runtime.ascendedWorld?0x60420b:runtime.paradoxWorld?0x20162c:fogColor, runtime.chaseRoom ? 0.009 : 0.013 + runtime.tier * 0.0006);
+      renderer.toneMappingExposure = cinematicExposure(runtime.ascendedWorld,runtime.paradoxWorld,runtime.chaseRoom,runtime.tier);
+      const floorMaterial = cave ? makeRockMaterial('ground') : makeAgedMetal(); floorMaterial.color.offsetHSL(0, 0, -runtime.tier * 0.008);
       const floor=addMesh(new THREE.PlaneGeometry(runtime.roomWidth, runtime.roomLength), floorMaterial, new THREE.Vector3(), new THREE.Euler(-Math.PI / 2, 0, 0));floor.userData.facilityFloor=true;
-      addMesh(new THREE.PlaneGeometry(runtime.roomWidth, runtime.roomLength), floorMaterial.clone(), new THREE.Vector3(0, runtime.roomHeight, 0), new THREE.Euler(Math.PI / 2, 0, 0));
-      const wallMat = cave ? caveMaterial.clone() : baseMaterial.clone();
+      addMesh(new THREE.PlaneGeometry(runtime.roomWidth, runtime.roomLength), floorMaterial, new THREE.Vector3(0, runtime.roomHeight, 0), new THREE.Euler(Math.PI / 2, 0, 0));
+      const wallMat = cave ? makeRockMaterial() : makeAgedMetal();
       addMesh(new THREE.BoxGeometry(0.5, runtime.roomHeight, runtime.roomLength), wallMat, new THREE.Vector3(-runtime.roomWidth / 2, runtime.roomHeight / 2, 0));
-      addMesh(new THREE.BoxGeometry(0.5, runtime.roomHeight, runtime.roomLength), wallMat.clone(), new THREE.Vector3(runtime.roomWidth / 2, runtime.roomHeight / 2, 0));
-      addMesh(new THREE.BoxGeometry(runtime.roomWidth, runtime.roomHeight, 0.45), wallMat.clone(), new THREE.Vector3(0, runtime.roomHeight / 2, runtime.roomLength / 2));
+      addMesh(new THREE.BoxGeometry(0.5, runtime.roomHeight, runtime.roomLength), wallMat, new THREE.Vector3(runtime.roomWidth / 2, runtime.roomHeight / 2, 0));
+      addMesh(new THREE.BoxGeometry(runtime.roomWidth, runtime.roomHeight, 0.45), wallMat, new THREE.Vector3(0, runtime.roomHeight / 2, runtime.roomLength / 2));
       // Build around the opening: a solid end wall would hide the animated gate.
       const openingWidth = 4.8;
       const openingHeight = 4.3;
       const sideWidth = (runtime.roomWidth - openingWidth) / 2;
       [-1, 1].forEach((side) => {
-        addMesh(new THREE.BoxGeometry(sideWidth, runtime.roomHeight, 0.45), wallMat.clone(),
+        addMesh(new THREE.BoxGeometry(sideWidth, runtime.roomHeight, 0.45), wallMat,
           new THREE.Vector3(side * (openingWidth / 2 + sideWidth / 2), runtime.roomHeight / 2, -runtime.roomLength / 2));
       });
-      addMesh(new THREE.BoxGeometry(openingWidth, runtime.roomHeight - openingHeight, 0.45), wallMat.clone(),
+      addMesh(new THREE.BoxGeometry(openingWidth, runtime.roomHeight - openingHeight, 0.45), wallMat,
         new THREE.Vector3(0, openingHeight + (runtime.roomHeight - openingHeight) / 2, -runtime.roomLength / 2));
       // A short passage makes the empty doorway visible once the gate lifts.
-      addMesh(new THREE.PlaneGeometry(openingWidth, 4), floorMaterial.clone(),
+      addMesh(new THREE.PlaneGeometry(openingWidth, 4), floorMaterial,
         new THREE.Vector3(0, 0, -runtime.roomLength / 2 - 2), new THREE.Euler(-Math.PI / 2, 0, 0));
       addBloodSplatters(rand, room);
       addTrapdoor();
-      runtime.roomGroup.add(new THREE.HemisphereLight(0x7ebdff,0x020817,runtime.chaseRoom?0.75:0.48));
+      runtime.roomGroup.add(new THREE.HemisphereLight(0xb0c4b4,0x17130d,runtime.chaseRoom?.38:.24));
       addCaveSunlight();
-      const lampCount = runtime.chaseRoom ? 14 + runtime.chaseLevel * 2 : Math.max(1, 4 - Math.floor(runtime.tier / 2));
+      const lampCount = runtime.chaseRoom ? 5 : 3;
       for (let i = 0; i < lampCount; i += 1) {
         const z = runtime.roomLength / 2 - 4 - i * (runtime.roomLength - 8) / Math.max(1, lampCount - 1);
-        const light = new THREE.PointLight(runtime.chaseRoom ? 0xf2ffff : i % 3 === 0 && runtime.tier > 2 ? 0xff355f : 0xb6e2ee, runtime.chaseRoom ? 35 : 15, runtime.chaseRoom ? 14 : 9, 1.5);
-        light.position.set((rand() - 0.5) * 2, runtime.roomHeight - 0.42, z); light.castShadow = i < 2;
+        const light = new THREE.PointLight(i%2?0xadc8b7:0xffdfb2,runtime.chaseRoom?42:27,runtime.chaseRoom?17:13,2);
+        light.position.set((i%2?1:-1)*(runtime.roomWidth/2-.8),Math.min(runtime.roomHeight-.4,4.6),z);light.castShadow=false;
         runtime.roomGroup.add(light); runtime.flickerLights.push(light);
         const lamp = addMesh(new THREE.BoxGeometry(runtime.chaseRoom ? 4.2 : 1.4, 0.11, 0.22),
-          new THREE.MeshStandardMaterial({ color: 0xc8e3e4, emissive: 0xeaffff, emissiveIntensity: runtime.chaseRoom ? 5.5 : 2.8 }), light.position.clone().add(new THREE.Vector3(0, 0.16, 0)));
+          new THREE.MeshStandardMaterial({ color:0xc7c4ac,emissive:0xffdeb4,emissiveIntensity:1.8 }), light.position.clone().add(new THREE.Vector3(0, 0.16, 0)));
         lamp.rotation.y = i % 2 ? 0.08 : -0.08;
       }
       const formationKey: CrystalKey = runtime.roomName.includes("Malachite") ? "malachite"
@@ -1785,19 +1748,13 @@ export default function IonGame() {
         const object = createCrystal(key, 0.6 + rand() * 1.25);
         object.position.set(side * (runtime.roomWidth / 2 - 0.55 - rand() * 0.8), 0, (rand() - 0.5) * (runtime.roomLength - 4));
         object.rotation.y = rand() * Math.PI; runtime.roomGroup.add(object);
-        if (i < 4) { const glow = new THREE.PointLight(CRYSTALS[key].color, 5 + rand() * 5, 4.2); glow.position.copy(object.position).add(new THREE.Vector3(0, 0.8, 0)); runtime.roomGroup.add(glow); }
+        if (i < 3) { const glow = new THREE.PointLight(CRYSTALS[key].color,7 + rand()*3,6,2); glow.position.copy(object.position).add(new THREE.Vector3(0, 0.8, 0)); runtime.roomGroup.add(glow); }
       }
-      if (cave) {
-        for (let i = 0; i < 18; i += 1) {
-          const side = rand() < 0.5 ? -1 : 1;
-          const radius = 0.65 + rand() * 1.25;
-          const rock = assets.create(i % 2 ? "rock" : "rockWide", { height: radius * 2, centered: true, tint: 0x263b3a }) ?? new THREE.Mesh(new THREE.DodecahedronGeometry(radius, 1), caveMaterial.clone());
-          rock.position.set(side * (runtime.roomWidth / 2 - rand() * 0.8), 0.3 + rand() * (runtime.roomHeight - 0.6), (rand() - 0.5) * runtime.roomLength);
-          runtime.roomGroup.add(rock);
-          rock.scale.set(0.7 + rand(), 0.8 + rand() * 1.6, 0.7 + rand());
-        }
+      if(cave){
+        addCaveScenery(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,runtime.layout,room);
       } else {
-        const pipeMaterial = new THREE.MeshStandardMaterial({ color: 0x252c2e, metalness: 0.86, roughness: 0.3 });
+        const pipeMaterial=makeAgedMetal();
+        addIndustrialScenery(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,room);
         [-1, 1].forEach((side) => addMesh(new THREE.CylinderGeometry(0.12, 0.12, runtime.roomLength - 1, 10), pipeMaterial,
           new THREE.Vector3(side * (runtime.roomWidth / 2 - 0.68), runtime.roomHeight - 0.62, 0), new THREE.Euler(Math.PI / 2, 0, 0)));
         for (let i = 0; i < 8; i += 1) {
@@ -2237,6 +2194,7 @@ export default function IonGame() {
       }else notify(`PICKAXE · ${object.userData.mineHits}/${total} · STRIKE AGAIN`);
       return true;
     }
+    function toggleGraphics(){graphicsEnabled=!graphicsEnabled;cinematic.setEnabled(graphicsEnabled);setCinematicGraphics(graphicsEnabled);try{localStorage.setItem('ion-cinematic-graphics',graphicsEnabled?'on':'off');}catch{/* session setting */}notify(graphicsEnabled?'CINEMATIC SHADOW DETAIL ENABLED':'PERFORMANCE MODE · CONTACT SHADOWS DISABLED');}
     function toggleView(){runtime.thirdPerson=!runtime.thirdPerson;notify(runtime.thirdPerson?'THIRD PERSON · V TO SWITCH':'FIRST PERSON · V TO SWITCH');updateHud(true);}
     function upgradePickaxe(){
       if(voidBlocked())return;
@@ -2669,7 +2627,7 @@ export default function IonGame() {
     }
     function touchLookEnd(id: number) { if (runtime.lastTouchLook?.id === id) runtime.lastTouchLook = null; }
 
-    actionRef.current = {toggleView,upgradePickaxe,repairJar,customize, start, resume, interact, fire, toggleLight, jump, close, craft, infuse, synthesizeFluorite,
+    actionRef.current = {toggleGraphics,toggleView,upgradePickaxe,repairJar,customize, start, resume, interact, fire, toggleLight, jump, close, craft, infuse, synthesizeFluorite,
       buyPersItem, buyBasdino, openInventory, useItem, banish, restartCheckpoint,
       toggleJar,exploreExtraction,
       confirmBoons,rememberNumber,answerMemory,offerVoid,offerLore,nextLoreScene,startNewSlot,loadSlot,saveRun:()=>saveRun(true),hostParty,joinParty,redeemBadgeCode,grantBadge,toggleBoon,completeArchive,leaveParty,openBadges,closeBadges,
@@ -2770,7 +2728,7 @@ export default function IonGame() {
       runtime.flashlight.distance = (runtime.lightInfusion === "quartz" ? 42 : 31)*(runtime.boons.includes("longbeam")?1.5:1)*(runtime.boons.includes("shortsight")?.55:1);
       runtime.flashlight.angle = runtime.lightInfusion === "quartz" ? 0.56 : 0.44; runtime.flashlight.penumbra = 0.64;
       runtime.luxuryLight.intensity = 0;
-      renderer.toneMappingExposure = runtime.ascendedWorld ? 1.04 : runtime.paradoxWorld ? 0.62 : runtime.chaseRoom ? 1.22 : Math.max(0.52, 0.76 - runtime.tier * 0.028);
+      renderer.toneMappingExposure = cinematicExposure(runtime.ascendedWorld,runtime.paradoxWorld,runtime.chaseRoom,runtime.tier);
       if (runtime.transition <= 0 && runtime.player.z < -runtime.roomLength / 2 - 0.82 && runtime.doorProgress > 0.82) { runtime.transition = 1; runtime.transitionDirection = 1; }
     }
     function updateEnemies(dt: number) {
@@ -2987,7 +2945,7 @@ export default function IonGame() {
       const dt = Math.min(0.05, (now - runtime.lastFrame) / 1000 || 0.016); runtime.lastFrame = now; runtime.hudTimer += dt;
       if (runtime.transition > 0 && runtime.running && !runtime.dead) { runtime.transition -= dt * 1.65; if (runtime.transition <= 0) { const nextRoom = runtime.room + 1; runtime.transitionDirection = 0; if(party.role==="guest")party.send({type:"request-room",room:nextRoom});else advanceDimension(); } }
       if (runtime.running && !runtime.dead && !runtime.won) {
-        if(runtime.infectionTime>=0){updateInfection(dt);renderer.render(scene,camera);animationFrame=requestAnimationFrame(animate);return;}
+        if(runtime.infectionTime>=0){updateInfection(dt);cinematic.render();animationFrame=requestAnimationFrame(animate);return;}
         if (runtime.cameraMode) renderCameraMode(); else { runtime.gunModel.visible = true; runtime.flashlight.visible = runtime.flashlightOn; runtime.luxuryLight.visible = runtime.flashlightOn; updateMovement(dt); }
         updateWorld(dt); updateEnemies(dt); updateHud();
       } else if (!runtime.cameraMode) { camera.position.copy(runtime.player); camera.rotation.order = "YXZ"; camera.rotation.set(runtime.pitch, runtime.yaw, 0); }
@@ -3019,9 +2977,9 @@ export default function IonGame() {
         target.z=THREE.MathUtils.clamp(target.z,-runtime.roomLength/2+.2,runtime.roomLength/2-.2);
         camera.position.copy(target);camera.lookAt(runtime.player.clone().add(new THREE.Vector3(0,0,-8).applyEuler(new THREE.Euler(runtime.pitch,runtime.yaw,0,'YXZ'))));runtime.gunModel.visible=false;camera.updateMatrixWorld(true);runtime.flashlight.position.copy(camera.worldToLocal(runtime.player.clone().add(new THREE.Vector3(.1,.05,-.25).applyAxisAngle(new THREE.Vector3(0,1,0),runtime.yaw))));
       }
-      renderer.render(scene, camera); animationFrame = requestAnimationFrame(animate);
+      cinematic.render(); animationFrame = requestAnimationFrame(animate);
     }
-    function onResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6)); renderer.setSize(window.innerWidth, window.innerHeight); }
+    function onResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35)); renderer.setSize(window.innerWidth, window.innerHeight);cinematic.resize(window.innerWidth,window.innerHeight); }
     function onKeyDown(event: KeyboardEvent) {
       const target=event.target as HTMLElement|null;if(target?.tagName==="INPUT"||target?.tagName==="TEXTAREA"||target?.isContentEditable)return;
       if(event.code==="KeyI"){if(event.repeat)return;event.preventDefault();if(screenRef.current==="inventory")close();else if(runtime.running&&!runtime.dead)openInventory();return;}
@@ -3053,7 +3011,7 @@ export default function IonGame() {
       delete document.body.dataset.paradox;delete document.body.dataset.ascended;delete document.body.dataset.riftfall;
       window.removeEventListener("resize", onResize); window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("mousemove", onMouseMove); window.removeEventListener("mousedown", onMouseDown); document.removeEventListener("pointerlockchange", onPointerLock);
-      renderer.dispose(); runtime.audio?.context.close().catch(() => undefined); runtimeRef.current = null;
+      cinematic.dispose();renderer.dispose(); runtime.audio?.context.close().catch(() => undefined); runtimeRef.current = null;
     };
   }, []);
 
@@ -3070,7 +3028,7 @@ export default function IonGame() {
     : grinRoomGap === 1 ? "ONE ROOM AWAY" : grinRoomGap >= 999 ? "NO SIGNAL" : `${grinRoomGap} ROOMS AWAY`;
 
   return (
-    <main className={`ion-shell ${hud.entityDistance < 8 ? "entity-near" : ""} ${hud.grinWarning ? "grin-warning" : ""} ${hud.hiding ? "trapdoor-hidden" : ""} ${hud.noiseActive && !screen && !hud.infectionCaption ? "noise-active" : ""}`}>
+    <main className={`ion-shell ${screen?"menus-visible":"gameplay-visible"} ${hud.entityDistance < 8 ? "entity-near" : ""} ${hud.grinWarning ? "grin-warning" : ""} ${hud.hiding ? "trapdoor-hidden" : ""} ${hud.noiseActive && !screen && !hud.infectionCaption ? "noise-active" : ""}`}>
       <svg width="0" height="0" aria-hidden="true" className="effect-definitions"><defs><filter id="ion-noise-waves" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.008 0.035" numOctaves="1" seed="8" result="waves"><animate attributeName="baseFrequency" values="0.008 0.035;0.012 0.055;0.008 0.035" dur="3s" repeatCount="indefinite" /></feTurbulence><feDisplacementMap in="SourceGraphic" in2="waves" scale={hud.noiseTime < 10 ? 16 : 7} xChannelSelector="R" yChannelSelector="G" /></filter></defs></svg>
       <canvas ref={canvasRef} className="ion-canvas" aria-label="ION 3D survival-horror game" />
       {hud.infectionCaption && !screen && <div className="infection-cinema" role="status"><span>REMETONS ENCOUNTER · 2%</span><strong>{hud.infectionCaption}</strong><small>THREAT TIMERS PAUSED DURING TRANSFORMATION</small></div>}
@@ -3131,7 +3089,7 @@ export default function IonGame() {
           </footer>
         </div>
       </section>}
-      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyConnected?"CONNECTED":hud.partyCode?"INVITE READY":"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
+      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={()=>act?.toggleGraphics()}>GRAPHICS · {cinematicGraphics?"CINEMATIC":"PERFORMANCE"}</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyConnected?"CONNECTED":hud.partyCode?"INVITE READY":"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
       {screen === "dead" && <section className="death-screen creature-death overlay-panel compact-panel" data-scare={hud.deathKind} style={{"--scare-color":`#${MONSTER_COLORS[hud.deathKind].toString(16).padStart(6,"0")}`} as React.CSSProperties}><div className="scare-distortion" aria-hidden="true" /><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>{MONSTER_NAMES[hud.deathKind]}</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div><div className="serp-review"><div className="serp-face" aria-label="SERP, a figure carrying a yellow light"><i /></div><strong>SERP · A LIGHT AFTER THE END</strong><p>{serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).well}</p><p>{serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).percent}% of this route completed.</p><p>Next time: {serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).next}</p></div>{hud.partyConnected&&<p>YOUR TEAMMATE CAN REVIVE YOU NEARBY</p>}<button className="primary-button danger-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.restartCheckpoint();}}>RETURN TO CHECKPOINT SOLO</button><button className="text-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.start(true);}}>NEW DESCENT</button></div></section>}
       {screen === "saves" && <MenuShell title="SAVED RUNS" subtitle="Three independent local slots · rooms save automatically when entered" onClose={() => showScreen("start")}><div className="save-grid">
         {savedRuns.map((slot,index)=><article className="save-card" key={index}><small>SLOT {index+1}</small><strong>{slot?`ROOM ${String(slot.state.room).padStart(3,"0")}`:"EMPTY SLOT"}</strong><p>{slot?`Saved ${new Date(slot.savedAt).toLocaleString()} · ${slot.state.discovered?.length??0}/7 minerals`:"Start a new descent and save automatically."}</p>{slot&&<button onClick={()=>actionRef.current?.loadSlot(index)}>CONTINUE RUN</button>}<button className="secondary" onClick={()=>actionRef.current?.startNewSlot(index)}>{slot?"NEW RUN IN THIS SLOT":"START NEW RUN"}</button></article>)}
