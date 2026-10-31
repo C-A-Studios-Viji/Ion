@@ -624,3 +624,23 @@ test('cave floor uses ordinary baked meshes and stock materials independently of
  const {addRockyCaveFloor}=h.load(path.join(root,'app/caveFloor.ts'));
  for(const type of ['duplex','multifloor','basement']){const g=new THREE.Group(),detail=addRockyCaveFloor(g,18,30,type,7,[]);assert(detail.userData.layoutGeometry);assert(detail.getObjectByName('cave-rock-slabs'));}
 });
+
+test('bedrock renders from above in entry halls and workshops, while floating arena stays open',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();
+ for(const room of [1,2,3,5,6,8,13]){
+  h.enter(room);
+  const ground=h.runtime.roomGroup.getObjectByName('cave-floor-decoration');assert(ground,`ground missing in room ${room}`);
+  ground.updateMatrixWorld(true);
+  const surface=ground.getObjectByName('uneven-cave-skin'),p=surface.geometry.attributes.position,n=surface.geometry.attributes.normal;
+  assert(surface.material.map?.isDataTexture);assert(surface.material.normalMap?.isDataTexture);assert(surface.material.roughnessMap?.isDataTexture);
+  assert.equal(surface.material.map.type,THREE.UnsignedByteType);assert.equal(surface.material.onBeforeCompile,THREE.Material.prototype.onBeforeCompile);
+  for(let i=0;i<n.count;i++)assert(n.getY(i)>0,`down-facing floor triangle in room ${room}`);
+  const ray=new THREE.Raycaster(new THREE.Vector3(0,12,h.runtime.player.z-3),new THREE.Vector3(0,-1,0));
+  assert(ray.intersectObject(surface).length>0,`floor invisible to front-face ray in room ${room}`);
+  assert.equal(h.runtime.roomGroup.children.some(o=>o.userData.facilityFloor&&o.visible),false);
+  let low=99,high=-99;for(let i=0;i<p.count;i++){low=Math.min(low,p.getY(i));high=Math.max(high,p.getY(i));}assert(high-low>.45);
+ }
+ const rainbow={kind:'rainbow',object:new THREE.Group()};h.runtime.stations.push(rainbow);h.runtime.nearest={kind:'station',index:h.runtime.stations.indexOf(rainbow)};h.act.interact();
+ assert.equal(h.runtime.resonatorWorld,true);
+ assert(!h.runtime.roomGroup.getObjectByName('cave-floor-decoration'),'terrain must never fill the lethal arena void');
+});

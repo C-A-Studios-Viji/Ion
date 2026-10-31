@@ -1928,10 +1928,13 @@ export default function IonGame() {
         const blocked=miningTasks.some(o=>Math.hypot(o.position.x-h.object.position.x,o.position.z-h.object.position.z)<h.radius+1);
         if(blocked){runtime.roomGroup.remove(h.object);disposeModel(h.object);}return !blocked;
       });
-      if(cave){
-        const clear=[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position)];
+      // Bedrock is present from the first room, including workshops and halls.
+      // Preserve flooded walkways and the Door 300 arena's lethal open void.
+      if(!runtime.resonatorWorld && runtime.layout!=='flooded'){
+        const clear=[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position),...runtime.hazards.map(h=>h.object.position)];
         addRockyCaveFloor(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,clear);
-        addMineralScatter(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,CRYSTALS[formationKey].color,clear);
+        runtime.roomGroup.children.filter(o=>o.userData.facilityFloor).forEach(o=>{o.visible=false;});
+        if(cave)addMineralScatter(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,CRYSTALS[formationKey].color,clear);
       }
       if(runtime.layout!=='standard'&&runtime.layout!=='inversion')badge('secret',`layout-${runtime.layout}`);
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
