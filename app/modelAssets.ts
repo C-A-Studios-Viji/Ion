@@ -109,12 +109,12 @@ export class ModelAssets {
             }
             node.geometry.setAttribute('color',new THREE.BufferAttribute(colors,3));material.vertexColors=true;
           }else applyGradient(material,low,high);
-          material.roughness = mineral ? .2 : .38;
-          material.metalness = .18;
+          material.roughness = mineral ? .21 : .57;
+          material.metalness = mineral ? 0 : .35;
         }
         if (material.emissive && options.emissive !== undefined) {
           material.emissive.setHex(options.tint ?? 0x57cfc3);
-          material.emissiveIntensity = mineral ? Math.min(.17,options.emissive) : options.emissive;
+          material.emissiveIntensity = mineral ? Math.min(.035,options.emissive) : options.emissive;
         }
         return material;
       };

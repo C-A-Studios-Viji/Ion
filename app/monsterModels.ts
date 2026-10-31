@@ -13,6 +13,25 @@ export function createMonster(kind:MonsterKind):THREE.Group {
   const skin=gradientMaterial(kind==="blob"?0x260818:kind==="haidini"?0x8b2101:0x020812,kind==="haidini"?0xffaa39:glow,0.035,kind==="haidini");
   const dark=gradientMaterial(0x010105,0x172332,0.015);
   const bone=gradientMaterial(0x584449,0xe9f9fa,0.12);
+  // Creature bodies absorb light like rough skin and bone. Only their eyes and
+  // supernatural markings should read as luminous against the new cave surfaces.
+  skin.roughness=.68;skin.metalness=0;skin.clearcoat=.12;
+  dark.roughness=.86;dark.metalness=0;dark.clearcoat=.04;
+  bone.roughness=.59;bone.metalness=0;bone.clearcoat=.08;
+  const baseCompile=skin.onBeforeCompile.bind(skin);
+  skin.onBeforeCompile=(shader,renderer)=>{
+    baseCompile(shader,renderer);
+    shader.fragmentShader=shader.fragmentShader.replace('#include <roughnessmap_fragment>',`#include <roughnessmap_fragment>
+float ionPores=fract(sin(dot(floor(ionPoint*135.0),vec3(12.9898,78.233,37.719)))*43758.5453);
+roughnessFactor=clamp(roughnessFactor+ionPores*.14,.35,.95);`);
+    shader.fragmentShader=shader.fragmentShader.replace('#include <normal_fragment_begin>',`#include <normal_fragment_begin>
+float ionTissue=sin(ionPoint.x*92.0+sin(ionPoint.z*31.0))*sin(ionPoint.y*85.0)*.0015;
+vec3 ionSx=dFdx(-vViewPosition),ionSy=dFdy(-vViewPosition);
+vec3 ionSr1=cross(ionSy,normal),ionSr2=cross(normal,ionSx);
+float ionSd=dot(ionSx,ionSr1);
+normal=normalize(max(abs(ionSd),.000001)*normal-sign(ionSd)*(dFdx(ionTissue)*ionSr1+dFdy(ionTissue)*ionSr2));`);
+  };
+  const skinKey=skin.customProgramCacheKey.bind(skin);skin.customProgramCacheKey=()=>skinKey()+'-tactile-v1';
   const eye=new THREE.MeshBasicMaterial({color:glow});
   const black=new THREE.MeshBasicMaterial({color:0x000003});
   const mesh=(g:THREE.BufferGeometry,m:THREE.Material,pos:number[],scale?:number[])=>{

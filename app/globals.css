@@ -393,3 +393,9 @@ body[data-extraction="true"] .vignette {animation:extraction-vignette 2.6s ease-
 @media(max-width:650px){.customize-layout{grid-template-columns:1fr}.survivor-preview svg{height:220px}.view-toggle{left:12px;bottom:175px;font-size:9px;padding:6px}.appearance-controls{gap:10px}}
 
 .survivor-fallback{display:grid;place-items:center;gap:12px;padding:24px 0;color:#8baf95;font:10px monospace;letter-spacing:1.2px}.survivor-fallback svg{height:300px;max-width:100%}.survivor-fallback small{text-align:center;font-size:9px;line-height:1.5}
+
+/* Clear lens during play; retain the terminal treatment on menus. */
+.gameplay-visible>.scanlines{opacity:.025;animation:none}
+.gameplay-visible>.fog-layer{opacity:.1}
+.gameplay-visible>.vignette{box-shadow:inset 0 0 13vw 2vw rgba(0,0,0,.38)}
+.gameplay-visible.entity-near>.vignette{box-shadow:inset 0 0 18vw 8vw rgba(40,0,7,.8)}
