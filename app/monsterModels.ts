@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import {enhanceCreature,creaturePalette} from "./creatureDetail";
 import { gradientMaterial } from "./surfaceStyle";
 
 export type MonsterKind = "entity" | "blob" | "haidini" | "crawler" | "watcher" | "sound" | "prism" | "mimic" | "wraith" | "noise" | "remetons" | "boonie" | "void" | "ramyram" | "lore" | "serp";
@@ -10,9 +11,10 @@ export const MONSTER_COLORS:Record<MonsterKind,number>={lore:0xb77dff,serp:0xffd
 export function createMonster(kind:MonsterKind):THREE.Group {
   const root=new THREE.Group();root.name=`monster:${kind}`;
   const glow=MONSTER_COLORS[kind];
-  const skin=gradientMaterial(kind==="blob"?0x260818:kind==="haidini"?0x8b2101:0x020812,kind==="haidini"?0xffaa39:glow,0.035,kind==="haidini");
+  const [low,high]=creaturePalette(kind);
+  const skin=gradientMaterial(low,high,.008,kind==="haidini");
   const dark=gradientMaterial(0x010105,0x172332,0.015);
-  const bone=gradientMaterial(0x584449,0xe9f9fa,0.12);
+  const bone=gradientMaterial(0x443f31,0xb4aa91,.006);
   // Creature bodies absorb light like rough skin and bone. Only their eyes and
   // supernatural markings should read as luminous against the new cave surfaces.
   skin.roughness=.68;skin.metalness=0;skin.clearcoat=.12;
@@ -32,7 +34,7 @@ float ionSd=dot(ionSx,ionSr1);
 normal=normalize(max(abs(ionSd),.000001)*normal-sign(ionSd)*(dFdx(ionTissue)*ionSr1+dFdy(ionTissue)*ionSr2));`);
   };
   const skinKey=skin.customProgramCacheKey.bind(skin);skin.customProgramCacheKey=()=>skinKey()+'-tactile-v1';
-  const eye=new THREE.MeshBasicMaterial({color:glow});
+  const eye=new THREE.MeshPhysicalMaterial({color:new THREE.Color(glow).multiplyScalar(.5),emissive:glow,emissiveIntensity:.4,roughness:.08,clearcoat:1,metalness:0,envMapIntensity:1});eye.userData.eyeSurface=true;
   const black=new THREE.MeshBasicMaterial({color:0x000003});
   const mesh=(g:THREE.BufferGeometry,m:THREE.Material,pos:number[],scale?:number[])=>{
     const node=new THREE.Mesh(g,m);node.position.set(pos[0],pos[1],pos[2]);if(scale)node.scale.set(scale[0],scale[1],scale[2]);node.castShadow=true;node.receiveShadow=true;root.add(node);return node;
@@ -115,7 +117,7 @@ normal=normalize(max(abs(ionSd),.000001)*normal-sign(ionSd)*(dFdx(ionTissue)*ion
     if(kind==="prism") {const halo=mesh(new THREE.TorusGeometry(1.1,.035,12,64),eye,[0,1.5,0]);halo.rotation.x=.8;halo.userData.spin=1.2;}
     focus=1.4;
   }
-  root.userData.focusY=focus;root.userData.monsterKind=kind;return root;
+  root.userData.focusY=focus;root.userData.monsterKind=kind;return enhanceCreature(root,kind,glow);
 }
 
 export function animateMonster(root:THREE.Object3D,time:number,moving=true){

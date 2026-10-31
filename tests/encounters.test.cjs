@@ -577,3 +577,38 @@ test('cinematic rendering has a GPU-free fallback and graphics mode survives a s
  h.act.toggleGraphics();assert.equal(h.saved.get('ion-cinematic-graphics'),'off');h.act.toggleGraphics();assert.equal(h.saved.get('ion-cinematic-graphics'),'on');
  assert(cinematicExposure(false,false,false,6)>.7);assert(cinematicExposure(false,false,true,6)>=.9);
 });
+
+test('clear crystal materials use physical transmission, preserved depth and polished facet highlights',()=>{
+ const h=gameHarness(),{crystalMaterial}=h.load(path.join(root,'app/crystalOptics.ts'));
+ for(const color of [0x30ba77,0xb895f4,0xf5fffb,0x3b4146,0xffbf37]){
+  const m=crystalMaterial(color);assert(m instanceof THREE.MeshPhysicalMaterial);assert(m.transmission>.8);assert(m.roughness<.08);assert(m.clearcoat>.9);assert(m.ior>1.4&&m.ior<1.6);assert(m.thickness>0);assert.equal(m.transparent,false);assert.equal(m.opacity,1);assert.equal(m.depthWrite,true);assert(m.attenuationDistance>0);
+ }
+ const {createGeode}=h.load(path.join(root,'app/mineralScenery.ts')),g=createGeode(0x30ba77,1,17,true),growth=g.getObjectByName('faceted-mineral-growth');
+ const matrix=new THREE.Matrix4(),p=new THREE.Vector3(),q=new THREE.Quaternion(),scale=new THREE.Vector3(),heights=[];
+ for(let i=0;i<growth.count;i++){growth.getMatrixAt(i,matrix);matrix.decompose(p,q,scale);heights.push(scale.y);assert(scale.x>0&&scale.z>0);}
+ assert(Math.max(...heights)-Math.min(...heights)>1);assert.equal(growth.castShadow,false);
+});
+
+test('scattered mineral pockets vary in height, are deterministic and leave objectives and walking lanes clear',()=>{
+ const h=gameHarness(),{planMineralScatter,addMineralScatter}=h.load(path.join(root,'app/mineralScenery.ts'));
+ const clear=[new THREE.Vector3(4,0,3),new THREE.Vector3(-4,0,-6)],points=planMineralScatter(20,35,42,clear);
+ assert(points.length>25&&points.length<160);assert.equal(JSON.stringify(points),JSON.stringify(planMineralScatter(20,35,42,clear)));
+ assert.notEqual(JSON.stringify(points),JSON.stringify(planMineralScatter(20,35,43,clear)));
+ for(const p of points){assert(Math.abs(p.x)>=1.5&&Math.abs(p.x)<=9);assert(Math.abs(p.z)<=13.5);assert(clear.every(c=>Math.hypot(c.x-p.x,c.z-p.z)>=1.5));}
+ assert(Math.max(...points.map(p=>p.height))-Math.min(...points.map(p=>p.height))>.8);
+ const sceneGroup=new THREE.Group(),detail=addMineralScatter(sceneGroup,20,35,'multifloor',42,0x30ba77,clear);assert(detail.userData.cosmeticOnly);assert.equal(detail.children.length,2);
+ const {roomFloor}=h.load(path.resolve(__dirname,'../app/roomTypes.ts'));
+ const crystals=detail.getObjectByName('scattered-clear-crystals'),matrix=new THREE.Matrix4(),p=new THREE.Vector3();for(let i=0;i<crystals.count;i++){crystals.getMatrixAt(i,matrix);p.setFromMatrixPosition(matrix);assert(Math.abs(p.y-(roomFloor('multifloor',35,p.z)+.1))<.0001);}
+});
+
+test('all sixteen creatures gain detailed anatomy without losing animation or distinctive surface styles',()=>{
+ const h=gameHarness(),{createMonster,animateMonster,MONSTER_NAMES}=h.load(path.join(root,'app/monsterModels.ts')),styles=new Set();
+ assert.equal(Object.keys(MONSTER_NAMES).length,16);
+ for(const kind of Object.keys(MONSTER_NAMES)){
+  const model=createMonster(kind);assert.equal(model.userData.detailedCreature,true);styles.add(model.userData.surfaceStyle);assert(Number.isFinite(model.userData.focusY));
+  let ridges=0,vertices=0;model.traverse(n=>{if(n.isMesh){vertices+=n.geometry.attributes.position.count;for(const v of n.geometry.attributes.position.array)assert(Number.isFinite(v));if(n.name.includes('anatomical-ridges'))ridges++;}});
+  assert(ridges>=1,kind+' missing anatomical surface');assert(vertices<150000,kind+' exceeds mesh budget');
+  animateMonster(model,1,true);animateMonster(model,3,false);model.traverse(n=>{assert(n.rotation.toArray().slice(0,3).every(Number.isFinite));});
+ }
+ assert.equal(styles.size,5);
+});
