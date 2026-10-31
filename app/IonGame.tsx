@@ -2987,6 +2987,12 @@ export default function IonGame() {
     function onResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35)); renderer.setSize(window.innerWidth, window.innerHeight);cinematic.resize(window.innerWidth,window.innerHeight); }
     function onKeyDown(event: KeyboardEvent) {
       const target=event.target as HTMLElement|null;if(target?.tagName==="INPUT"||target?.tagName==="TEXTAREA"||target?.isContentEditable)return;
+      if(event.code==="KeyP"){
+        if(event.repeat)return;event.preventDefault();
+        if(screenRef.current==="pause"){resume();return;}
+        if(runtime.running&&!runtime.dead&&!runtime.won&&!screenRef.current){runtime.running=false;runtime.keysDown.clear();runtime.touchMove={x:0,y:0,sprint:false};showScreen("pause");if(document.pointerLockElement)document.exitPointerLock();}
+        return;
+      }
       if(event.code==="KeyI"){if(event.repeat)return;event.preventDefault();if(screenRef.current==="inventory")close();else if(runtime.running&&!runtime.dead)openInventory();return;}
       if(event.code==="KeyV"&&!event.repeat&&!screenRef.current){toggleView();return;}
       runtime.keysDown.add(event.code); if (event.repeat) return; if (event.code === "KeyE") interact(); if (event.code === "KeyF") toggleLight(); if (event.code === "Space") { event.preventDefault(); jump(); } }
@@ -3075,7 +3081,7 @@ export default function IonGame() {
         <button className="text-button" onClick={() => showScreen("party")}>PLAY WITH A FRIEND</button>
         <button className="text-button" onClick={()=>{customizeReturn.current='start';showScreen('customize');}}>CUSTOMISE SURVIVOR</button>
         <button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button>
-        <div className="controls-copy">{touchCapable ? "LEFT PAD MOVE · RIGHT SIDE LOOK · USE THE ACTION BUTTONS" : "WASD MOVE · SPACE JUMP · CLICK FIRE / MINE · E INTERACT / MINE · I INVENTORY · V CAMERA · F LIGHT · SHIFT RUN"}</div>
+        <div className="controls-copy">{touchCapable ? "LEFT PAD MOVE · RIGHT SIDE LOOK · USE THE ACTION BUTTONS" : "WASD MOVE · SPACE JUMP · CLICK FIRE / MINE · E INTERACT / MINE · I INVENTORY · P PAUSE · V CAMERA · F LIGHT · SHIFT RUN"}</div>
         <small className={`headphones ${webglUnavailable ? "danger" : ""}`}>{webglUnavailable ? "ION REQUIRES WEBGL 2 · OPEN ON A DEVICE WITH 3D GRAPHICS ENABLED" : assetProgress < 100 ? `PREPARING FACILITY · ${assetProgress}%` : "HEADPHONES RECOMMENDED · ONE-TOUCH DEATH · CHECKPOINTS EVERY 25 ROOMS"}</small>
       </section>}
       {screen === "tutorial" && <section className="tutorial-screen overlay-panel">
