@@ -5,7 +5,7 @@ import * as THREE from "three";
 import {CinematicRenderer,cinematicExposure} from './cinematicRenderer';
 import {makeRockMaterial,makeAgedMetal} from './rockMaterials';
 import {addCaveScenery,addIndustrialScenery} from './caveScenery';
-import {createGeode} from './mineralScenery';
+import {createGeode,addMineralScatter} from './mineralScenery';
 import { addRockyCaveFloor } from "./caveFloor";
 import { ModelAssets, animateModel, disposeModel } from "./modelAssets";
 import { createMonster, animateMonster, MONSTER_NAMES, MONSTER_COLORS, type MonsterKind } from "./monsterModels";
@@ -864,6 +864,7 @@ export default function IonGame() {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.72;
+    renderer.transmissionResolutionScale=.5;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x010306);
     scene.fog = new THREE.FogExp2(0x03090b, 0.047);
@@ -1927,7 +1928,11 @@ export default function IonGame() {
         const blocked=miningTasks.some(o=>Math.hypot(o.position.x-h.object.position.x,o.position.z-h.object.position.z)<h.radius+1);
         if(blocked){runtime.roomGroup.remove(h.object);disposeModel(h.object);}return !blocked;
       });
-      if(cave)addRockyCaveFloor(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position)]);
+      if(cave){
+        const clear=[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position)];
+        addRockyCaveFloor(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,clear);
+        addMineralScatter(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,CRYSTALS[formationKey].color,clear);
+      }
       if(runtime.layout!=='standard'&&runtime.layout!=='inversion')badge('secret',`layout-${runtime.layout}`);
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
       if(!restore && activeSlotRef.current !== null) saveRun(false);

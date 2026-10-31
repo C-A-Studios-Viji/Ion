@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import {configureCrystalOptics} from "./crystalOptics";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
@@ -55,7 +56,7 @@ export class ModelAssets {
         let model: Pick<GLTF,"scene"|"animations">;
         if(mineral){
           const geometry=await stlLoader.loadAsync(url);
-          const group=new THREE.Group();group.add(new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0xffffff,roughness:.2,metalness:.18})));
+          const group=new THREE.Group();group.add(new THREE.Mesh(geometry,configureCrystalOptics(new THREE.MeshPhysicalMaterial(),0x83ceb2)));
           model={scene:group,animations:[]};
         }else model=await loader.loadAsync(url);
         const processed = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
@@ -91,7 +92,7 @@ export class ModelAssets {
       if (!(node instanceof THREE.Mesh)) return;
       node.geometry = node.geometry.clone();
       const copy = (source: THREE.Material) => {
-        const material = source.clone() as THREE.MeshStandardMaterial;
+        const material = source.clone() as THREE.MeshPhysicalMaterial;
         const mineral=key.startsWith("mineral_");
         if (material.color && options.tint !== undefined) {
           material.map = null;
@@ -103,7 +104,7 @@ export class ModelAssets {
             const pos=node.geometry.getAttribute('position'),colors=new Float32Array(pos.count*3);
             for(let i=0;i<pos.count;i++){
               const t=(pos.getY(i)-box.min.y)/Math.max(.001,box.max.y-box.min.y);
-              const rock=new THREE.Color(0x544e45),base=new THREE.Color(options.tint).multiplyScalar(.35),tip=new THREE.Color(options.tint).lerp(new THREE.Color(0xf2edff),.48);
+              const rock=new THREE.Color(0x817969),base=new THREE.Color(options.tint).lerp(new THREE.Color(0xffffff),.58),tip=new THREE.Color(options.tint).lerp(new THREE.Color(0xffffff),.88);
               const c=t<.24?rock.lerp(base,THREE.MathUtils.smoothstep(t,.14,.24)):base.lerp(tip,THREE.MathUtils.smoothstep(t,.24,1));
               c.toArray(colors,i*3);
             }
@@ -114,12 +115,13 @@ export class ModelAssets {
         }
         if (material.emissive && options.emissive !== undefined) {
           material.emissive.setHex(options.tint ?? 0x57cfc3);
-          material.emissiveIntensity = mineral ? Math.min(.035,options.emissive) : options.emissive;
+          material.emissiveIntensity = mineral ? .006 : options.emissive;
         }
+        if(mineral)configureCrystalOptics(material,options.tint??0x83ceb2);
         return material;
       };
       node.material = Array.isArray(node.material) ? node.material.map(copy) : copy(node.material);
-      node.castShadow = true; node.receiveShadow = true;
+      node.castShadow = !key.startsWith("mineral_"); node.receiveShadow = true;
       // Animated bounds can extend beyond the initial rest pose.
       if (node instanceof THREE.SkinnedMesh) node.frustumCulled = false;
     });
