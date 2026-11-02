@@ -20,13 +20,43 @@ a manual save for crystals, inventory, tuned resonators and collected specimens.
 Saves and the 250 badge records remain in that browser's storage. Clearing site
 data removes them, and they do not follow an account to another device.
 
-Open **Play with a friend** to host a two-player room and share the five-digit
-code with a friend. They choose **Join room**, enter the code, and join the
-host's current descent. Room transitions, pickups, resonators, enemies, player
-positions and revives use an actual WebRTC data connection with PeerJS
-signaling. Both browsers must stay online, and the host must leave their tab
-open. This uses PeerJS's public signaling server, so restrictive networks may
-need a TURN relay or a self-hosted PeerServer for reliable connections.
+Open **Play with a friend**, confirm your Boons, then share the generated invite
+link. Your friend opens the link and chooses **Join**. Both players enter the
+host's current room. The host keeps the game open and owns room/hazard state.
+
+Multiplayer uses the ION Supabase Realtime server over secure WebSockets. It has
+no PeerJS, WebRTC, STUN or TURN dependency and does not need a player plugin.
+Reliable actions and snapshots have acknowledgement, retry, ordered delivery and
+duplicate suppression. Movement updates skip stale packets. Brief network
+interruptions reconnect to the same invite and request a fresh host snapshot.
+Only one guest is admitted; a third survivor receives a room-full message.
+Invite links are room capabilities: share them only with the intended friend.
+A new hosting session creates a new link. This is host-authoritative co-op via a
+managed relay, rather than a separately simulated dedicated game server.
+
+The relay project is `ion-multiplayer` in Mumbai (`ap-south-1`), initially created
+on Supabase's free plan. Only its public publishable key is in the browser;
+there are no player accounts or publicly readable game database tables. Free
+plan connection and message quotas apply. Configure the endpoint in
+`app/multiplayerConfig.ts` if the project is moved or the public key is rotated.
+
+The cave envelope uses baked geometry and byte textures with stock materials.
+The bedrock rises into rounded wall fillets and a rough ceiling crown. Surface
+detail is cosmetic; traversal continues to use the original smooth collision
+profile. Required-object clearances and the exit aperture remain open.
+
+Run all 150 deterministic gameplay, geometry, asset and multiplayer checks:
+
+```bash
+node --test tests/encounters.test.cjs tests/multiplayer.test.cjs tests/assets.test.mjs
+npx tsc --noEmit --incremental false
+npm run build:pages
+```
+
+The network tests exercise loss/retry, reordered snapshots, reconnects, occupied
+rooms, room isolation, malformed packets, dimension door numbers and co-op
+actions. They use a simulated relay for reproducibility; actual server and
+browser acceptance checks must be run separately.
 
 The Infusionsmith converts Malachite, Amethyst, Quartz and Corrupted crystal
 into two Fluorite per batch. Normal rooms can contain one through four Crawlers,
