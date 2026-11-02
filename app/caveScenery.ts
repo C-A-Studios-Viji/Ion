@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import {makeRockMaterial,makeAgedMetal} from './rockMaterials';
 import {roomFloor,type RoomType} from './roomTypes';
+import {caveFloorRelief} from './caveFloor';
+import {makeCaveGroundMaterial} from './caveGroundMaterial';
 function rng(seed:number){let n=seed>>>0;return ()=>((n=(Math.imul(n,1664525)+1013904223)>>>0)/4294967296);}
 function ripple(x:number,y:number,z:number){return Math.sin(x*1.7+y*.7+z*1.9)*.16+Math.sin(x*4.1-z*3.8+y*2.3)*.075;}
 function uvGeometry(points:number[],indices:number[]){const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(points,3));g.setIndex(indices);g.computeVertexNormals();return g;}
@@ -12,43 +14,88 @@ export function fractureGeometry(detail=1){
  }
  g.computeVertexNormals();return g;
 }
-/** Visual shell stays behind the playable wall boundary. No gameplay colliders. */
-export function addCaveScenery(group:THREE.Group,w:number,l:number,h:number,type:RoomType,seed:number){
+/** A continuous rounded rock envelope. Decorative geometry never enters the
+ * collision list; the player retains the original smooth movement profile. */
+export function addCaveScenery(group:THREE.Group,w:number,l:number,h:number,type:RoomType,seed:number,clearPoints:THREE.Vector3[]=[]){
  const root=new THREE.Group();root.name='cinematic-cave-shell';root.userData.cosmeticOnly=true;root.userData.layoutGeometry=true;
- const rand=rng(seed*41+17),cols=Math.ceil(l/.7),rows=Math.ceil(h/.65);
+ const material=makeCaveGroundMaterial(),cols=Math.ceil(l/.45),rows=28;
+ const lower=.95,upper=Math.min(1.7,h*.23),half=w/2-.26;
+ const wave=(a:number,z:number)=>.16+.16*Math.sin(a*2.2+z*.83+seed*.31)+.09*Math.sin(a*5.1-z*2.3);
+ const wallPoint=(side:number,t:number,z:number)=>{
+  const base=roomFloor(type,l,z),ceiling=h+Math.min(0,base);
+  let x:number,y:number,weight:number;
+  if(t<=.25){
+   const a=t/.25*Math.PI/2;x=half-lower+lower*Math.sin(a);
+   const foot=caveFloorRelief(side*(half-lower),z,w,l,clearPoints);
+   y=base+foot+(lower-foot)*(1-Math.cos(a));weight=Math.sin(a);
+  }else if(t<=.72){
+   const f=(t-.25)/.47;x=half;y=THREE.MathUtils.lerp(base+lower,ceiling-upper,f);weight=1;
+  }else{
+   const a=(t-.72)/.28*Math.PI/2;x=half-upper+upper*Math.cos(a);
+   y=ceiling-upper+upper*Math.sin(a);weight=Math.cos(a);
+  }
+  x-=wave(y,z)*weight;
+  return new THREE.Vector3(side*x,y,z);
+ };
+ function mesh(name:string,points:number[],indices:number[],uvs:number[],colors:number[]){
+  const g=uvGeometry(points,indices);g.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));g.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));g.computeBoundingBox();g.computeBoundingSphere();
+  const m=new THREE.Mesh(g,material);m.name=name;m.castShadow=true;m.receiveShadow=true;root.add(m);return m;
+ }
  for(const side of [-1,1]){
-  const p:number[]=[],idx:number[]=[];
-  for(let y=0;y<=rows;y++)for(let z=0;z<=cols;z++){
-   const zz=-l/2+z*l/cols,yy=y*h/rows+Math.min(0,roomFloor(type,l,zz));
-   p.push(side*(w/2-.12-ripple(0,yy,zz)),yy,zz);
+  const p:number[]=[],idx:number[]=[],uv:number[]=[],col:number[]=[];
+  for(let row=0;row<=rows;row++)for(let z=0;z<=cols;z++){
+   const zz=-l/2+z*l/cols,v=wallPoint(side,row/rows,zz);p.push(v.x,v.y,v.z);uv.push(zz/2.4,row/rows*h/2.4);
+   const shade=.64+wave(v.y,zz)*.4;col.push(shade,shade,shade*.98);
   }
   for(let y=0;y<rows;y++)for(let z=0;z<cols;z++){const a=y*(cols+1)+z,b=a+1,c=a+cols+1,d=c+1;if(side<0)idx.push(a,c,b,b,c,d);else idx.push(a,b,c,b,d,c);}
-  const wall=new THREE.Mesh(uvGeometry(p,idx),makeRockMaterial());wall.name='folded-rock-wall';wall.receiveShadow=true;wall.castShadow=true;root.add(wall);
+  mesh('folded-rock-wall',p,idx,uv,col);
  }
- // A broken vault replaces the flat ceiling silhouette without lowering clearance.
- const p:number[]=[],idx:number[]=[],across=Math.ceil(w/.7);
+ // The crown shares its first and last vertices with the upper wall curves.
+ const p:number[]=[],idx:number[]=[],uv:number[]=[],col:number[]=[],across=Math.ceil(w/.45);
+ const crownX=half-upper;
  for(let x=0;x<=across;x++)for(let z=0;z<=cols;z++){
-  const xx=-w/2+x*w/across,zz=-l/2+z*l/cols;
-  p.push(xx,h-.08+ripple(xx,0,zz)*.6-Math.pow(Math.abs(xx)/(w/2),4)*.3,zz);
+  const t=x/across,xx=THREE.MathUtils.lerp(-crownX,crownX,t),zz=-l/2+z*l/cols;
+  const arch=Math.sin(t*Math.PI),relief=arch*(.28+wave(xx,zz)*1.7);
+  p.push(xx,h+Math.min(0,roomFloor(type,l,zz))-relief,zz);uv.push(xx/2.4,zz/2.4);
+  const shade=.69-relief*.12;col.push(shade,shade,shade*.98);
  }
  for(let x=0;x<across;x++)for(let z=0;z<cols;z++){const a=x*(cols+1)+z,b=a+1,c=a+cols+1,d=c+1;idx.push(a,c,b,b,c,d);}
- const vault=new THREE.Mesh(uvGeometry(p,idx),makeRockMaterial());vault.name='broken-cave-vault';vault.castShadow=true;vault.receiveShadow=true;root.add(vault);
- // Three independent fragment shapes; instanced surfaces keep draw calls bounded.
- for(let shape=0;shape<3;shape++){
-  const matrices:THREE.Matrix4[]=[],colors:THREE.Color[]=[];
-  for(const side of [-1,1])for(let z=-l/2+1.2;z<l/2-1.2;z+=1.35)for(let y=.55;y<h-.2;y+=1.15){
-   if(Math.floor(rand()*3)!==shape)continue;
-   const pos=new THREE.Vector3(side*(w/2+.48),y+(rand()-.5)*.4,z+(rand()-.5)*.6);
-   const q=new THREE.Quaternion().setFromEuler(new THREE.Euler(rand()*.5,rand()*Math.PI,(rand()-.5)*.7));
-   // Their inner edge remains outside the player's x boundary.
-   matrices.push(new THREE.Matrix4().compose(pos,q,new THREE.Vector3(.37+rand()*.18,.55+rand()*.6,.65+rand()*.5)));
-   colors.push(new THREE.Color().setRGB(.78+rand()*.15,.76+rand()*.12,.7+rand()*.12));
+ mesh('broken-cave-vault',p,idx,uv,col);
+ // End caps carry the same uneven rock. The exit aperture remains completely
+ // empty, including above ramps and in the larger multi-floor layouts.
+ for(const side of [-1,1]){
+  const p:number[]=[],idx:number[]=[],uv:number[]=[],col:number[]=[],nx=Math.ceil(w/.45),ny=Math.ceil(h/.4);
+  for(let y=0;y<=ny;y++)for(let x=0;x<=nx;x++){
+   const xx=-w/2+x*w/nx,yy=y*h/ny,edge=THREE.MathUtils.smoothstep(Math.abs(xx),w*.25,w*.5);
+   const inset=(.26+wave(xx+yy,side*l/2)*.8)*(1-edge);
+   p.push(xx,yy,side*(l/2-.24-inset));uv.push(xx/2.4,yy/2.4);const shade=.68+wave(xx,yy)*.3;col.push(shade,shade,shade*.98);
   }
-  const m=new THREE.InstancedMesh(fractureGeometry(1),makeRockMaterial('slab'),matrices.length);
-  matrices.forEach((matrix,i)=>{m.setMatrixAt(i,matrix);m.setColorAt(i,colors[i]);});m.name='layered-wall-fragments';m.castShadow=true;m.receiveShadow=true;m.computeBoundingSphere();root.add(m);
+  for(let y=0;y<ny;y++)for(let x=0;x<nx;x++){
+   const x0=-w/2+x*w/nx,x1=x0+w/nx,y0=y*h/ny;
+   if(side<0&&x0<2.65&&x1> -2.65&&y0<4.6)continue;
+   const a=y*(nx+1)+x,b=a+1,c=a+nx+1,d=c+1;
+   if(side<0)idx.push(a,b,c,b,d,c);else idx.push(a,c,b,b,c,d);
+  }
+  mesh(side<0?'cave-exit-rock':'cave-entry-rock',p,idx,uv,col);
  }
- addIndustrialScenery(root,w,l,h,seed,true);
- group.add(root);return root;
+ // Broad strata in a few baked meshes provide silhouette relief without
+ // instancing or shader hooks, including in mobile Performance mode.
+ for(let sideIndex=0;sideIndex<2;sideIndex++){
+  const side=sideIndex?1:-1,points:number[]=[],normals:number[]=[],uvs:number[]=[],colors:number[]=[];
+  const source=fractureGeometry(1),sp=source.attributes.position,sn=source.attributes.normal;
+  const rand=rng(seed*41+sideIndex+17),v=new THREE.Vector3(),n=new THREE.Vector3(),matrix=new THREE.Matrix4(),normal=new THREE.Matrix3();
+  let count=0;
+  for(let z=-l/2+1.5;z<l/2-1.5;z+=1.7)for(let y=1.6;y<h-upper-.3;y+=1.55){
+   const base=roomFloor(type,l,z);if(y<base+1.2)continue;
+   const q=new THREE.Quaternion().setFromEuler(new THREE.Euler(rand()*.3,rand()*.3,(rand()-.5)*.5));
+   matrix.compose(new THREE.Vector3(side*(half+.13),y,z+(rand()-.5)*.5),q,new THREE.Vector3(.42,.45+rand()*.3,.7+rand()*.35));normal.getNormalMatrix(matrix);
+   const shade=.6+rand()*.18;count++;
+   for(let i=0;i<sp.count;i++){v.fromBufferAttribute(sp,i).applyMatrix4(matrix);n.fromBufferAttribute(sn,i).applyNormalMatrix(normal);points.push(v.x,v.y,v.z);normals.push(n.x,n.y,n.z);uvs.push(v.z/2.4,v.y/2.4);colors.push(shade,shade,shade*.98);}
+  }
+  source.dispose();const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(points,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));g.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));g.computeBoundingSphere();
+  const m=new THREE.Mesh(g,material);m.name='layered-wall-fragments';m.userData.rockCount=count;m.castShadow=true;m.receiveShadow=true;root.add(m);
+ }
+ addIndustrialScenery(root,w,l,h,seed,true);group.add(root);return root;
 }
 export function addIndustrialScenery(group:THREE.Group,w:number,l:number,h:number,seed:number,cave=false){
  const root=new THREE.Group();root.name='industrial-service-details';root.userData.cosmeticOnly=true;root.userData.layoutGeometry=true;

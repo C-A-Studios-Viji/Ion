@@ -1,61 +1,58 @@
-const test=require('node:test');
-const assert=require('node:assert/strict');
-const fs=require('node:fs');
-const path=require('node:path');
-const vm=require('node:vm');
-const ts=require('typescript');
-const {EventEmitter}=require('node:events');
-const {webcrypto}=require('node:crypto');
+const test=require('node:test'),assert=require('node:assert/strict');
+const {loadMultiplayer,relayHarness,pose}=require('./multiplayerHarness.cjs');
+const api=loadMultiplayer();
 
-test('link invites and legacy peers exchange room state, appearance and live actions over a data connection',async()=>{
-  const peers=new Map(),peerOptions=[];
-  class Connection extends EventEmitter{
-    open=false;
-    send(message){if(this.open)queueMicrotask(()=>this.other.emit('data',message));}
-    close(){if(!this.open)return;this.open=false;this.emit('close');this.other.open=false;this.other.emit('close');}
-  }
-  class Peer extends EventEmitter{
-    constructor(id,options){super();if(id&&typeof id==='object'){options=id;id=undefined;}peerOptions.push(options);this.id=id??`guest-${peers.size}`;peers.set(this.id,this);queueMicrotask(()=>this.emit('open',this.id));}
-    connect(id){
-      const client=new Connection(),server=new Connection();client.other=server;server.other=client;
-      queueMicrotask(()=>{const host=peers.get(id);if(!host){this.emit('error',new Error('Room unavailable'));return;}
-        host.emit('connection',server);server.open=true;client.open=true;server.emit('open');client.emit('open');});
-      return client;
-    }
-    destroy(){peers.delete(this.id);}
-  }
-  const file=path.resolve(__dirname,'../app/multiplayer.ts');
-  const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
-  const module={exports:{}};
-  vm.runInNewContext(code,{module,exports:module.exports,require:()=>Peer,crypto:webcrypto,URL,setTimeout,clearTimeout,console,queueMicrotask});
-  const {PartyLink,partyPeerId,validPartyCode,hasTripleDigit,randomPlayerName,secretSignal,parsePartyInvite,partyInviteUrl,randomInviteToken}=module.exports;
-  assert.equal(validPartyCode('12345'),true);assert.equal(validPartyCode('1234'),false);
-  assert.equal(hasTripleDigit('11311'),true);assert.equal(hasTripleDigit('12345'),false);
-  assert.equal(randomPlayerName(()=>0),'ScoutSalmon');
-  assert.equal(secretSignal('xxoop'),'skip-pers');assert.equal(secretSignal('C9P98H'),'skip-pers');assert.equal(secretSignal('1DEV1'),'one-dev');assert.equal(secretSignal('NOPE'),null);
-  assert.equal(partyPeerId('12345'),'ion-facility-12345');
-  const token=randomInviteToken();assert.match(token,/^[a-f0-9]{32}$/);
-  const invite=partyInviteUrl('https://c-a-studios-viji.github.io/Ion/?other=x#old',token);
-  assert.equal(parsePartyInvite(invite),token);assert.equal(new URL(invite).pathname,'/Ion/');assert.equal(new URL(invite).searchParams.has('other'),false);
-  assert.equal(parsePartyInvite('https://example.com/?join=bad'),null);assert.equal(parsePartyInvite('javascript:alert(1)'),null);
-  const tokenHost=new PartyLink(),tokenGuest=new PartyLink();let tokenMessage;
-  tokenGuest.onMessage=m=>{tokenMessage=m;};tokenHost.onConnect=()=>tokenHost.send({type:'hello',state:{room:42},pose:{name:'LinkSurvivor',appearance:{suit:'#123456'}}});
-  await tokenHost.host(token);await tokenGuest.join(parsePartyInvite(invite));await new Promise(resolve=>setImmediate(resolve));assert.equal(tokenMessage.state.room,42);assert.equal(tokenMessage.pose.appearance.suit,'#123456');tokenGuest.close();tokenHost.close();
-  peerOptions.length=0;
-  const host=new PartyLink(),guest=new PartyLink();let receivedByGuest,receivedByHost;
-  guest.onMessage=message=>{receivedByGuest=message;};host.onMessage=message=>{receivedByHost=message;};
-  host.onConnect=()=>host.send({type:'hello',state:{room:25},pose:{x:0,y:0,z:1,yaw:0,light:true,dead:false,room:25,name:host.playerName}});
-  assert.equal(await host.host('12345'),'12345');await guest.join('12345');
-  assert.equal(peerOptions.length,2);assert(peerOptions.every(options=>options.host==='0.peerjs.com'&&options.secure===true));
-  assert(peerOptions.every(options=>options.config.iceServers.length>=4));
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(receivedByGuest.type,'hello');assert.equal(receivedByGuest.state.room,25);
-  assert.equal(typeof receivedByGuest.pose.name,'string');assert(receivedByGuest.pose.name.length>4);
-  guest.send({type:'action',room:25,action:'resonator',id:3});
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(receivedByHost.action,'resonator');assert.equal(receivedByHost.id,3);
-  host.send({type:'room',state:{room:26}});
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(receivedByGuest.state.room,26);
-  guest.close();host.close();
+test('WebSocket host and guest join, exchange snapshots, actions and appearance, then clean up',async()=>{
+ const h=relayHarness(),{host,guest,close}=await h.pair();try{
+  assert(host.connection.open&&guest.connection.open);assert(h.sockets.every(s=>s.url.startsWith('wss://')));
+  let received;guest.onMessage=m=>received=m;
+  host.send({type:'hello',state:{room:25},pose:pose({appearance:{suit:'#123456'}})});await h.flush();assert.equal(received.state.room,25);assert.equal(received.pose.appearance.suit,'#123456');
+  host.onMessage=m=>received=m;guest.send({type:'action',room:25,action:'resonator',id:3});await h.flush();assert.equal(received.id,3);
+ }finally{close();}assert.equal(h.timers.size,0);assert(h.sockets.every(s=>s.readyState===3));
 });
+
+const inviteCases=[
+ ['128-bit token','a'.repeat(32),'a'.repeat(32)],['uppercase token','B'.repeat(32),'b'.repeat(32)],['trimmed token','  '+'c'.repeat(32)+'\n','c'.repeat(32)],['legacy code','12345','12345'],
+ ['live invite','https://c-a-studios-viji.github.io/Ion/?join='+'d'.repeat(32),'d'.repeat(32)],['extra url arguments','https://example.test/Ion/?x=1&join='+'e'.repeat(32)+'#part','e'.repeat(32)],
+ ['empty','',null],['short','1234',null],['long numeric','123456',null],['short hex','a'.repeat(31),null],['long hex','a'.repeat(33),null],['non-hex','z'.repeat(32),null],['javascript','javascript:alert(1)',null],['file scheme','file:///Ion/?join=12345',null],['missing token','https://example.test/Ion/',null],['invalid url token','https://example.test/?join=xyz',null],['data uri','data:text/plain,12345',null],['fragment-only token','https://example.test/#join=12345',null],['encoded token','https://example.test/?join=%31%32%33%34%35','12345'],['whitespace url',' https://example.test/?join=12345 ','12345']
+];
+for(const [name,input,expected]of inviteCases)test('invite parsing: '+name,()=>assert.equal(api.parsePartyInvite(input),expected));
+
+const invalidPoses=[
+ ['null',null],['array',[]],['missing position',{}],['infinite x',pose({x:Infinity})],['NaN y',pose({y:NaN})],['string z',pose({z:'5'})],['out-of-bounds x',pose({x:10001})],['negative invalid y',pose({y:-10001})],['missing yaw',pose({yaw:undefined})],['infinite yaw',pose({yaw:-Infinity})],['zero room',pose({room:0})],['room 401',pose({room:401})],['fractional room',pose({room:1.5})],['string room',pose({room:'25'})],['null light',pose({light:null})],['number dead',pose({dead:0})],['missing name',pose({name:undefined})],['overlong name',pose({name:'a'.repeat(49)})],['array appearance',pose({appearance:[]})],['string appearance',pose({appearance:'bad'})]
+];
+for(const [name,value]of invalidPoses)test('reject malformed survivor: '+name,()=>assert.equal(api.validPose(value),false));
+
+const invalidMessages=[
+ ['null',null],['array',[]],['no type',{}],['unknown type',{type:'admin'}],['missing pose',{type:'pose'}],['bad pose',{type:'pose',pose:pose({x:NaN})}],['no hello state',{type:'hello',pose:pose()}],['bad hello room',{type:'hello',pose:pose(),state:{room:-1}}],['bad hello pose',{type:'hello',pose:{},state:{room:1}}],['null snapshot',{type:'room',state:null}],['array snapshot',{type:'room',state:[]}],['bad snapshot room',{type:'room',state:{room:401}}],['zero requested room',{type:'request-room',room:0}],['fractional requested room',{type:'request-room',room:3.5}],['bad death room',{type:'dead',room:'3'}],['missing action',{type:'action',room:1}],['unknown action',{type:'action',room:1,action:'admin'}],['negative pickup',{type:'action',room:1,action:'pickup',id:-1}],['fractional pickup',{type:'action',room:1,action:'pickup',id:1.5}],['huge pickup',{type:'action',room:1,action:'pickup',id:10000}],['infinite fire position',{type:'action',room:1,action:'fire',x:Infinity}],['invalid world timer',{type:'world',room:1,noiseTime:Infinity}],['world enemies not list',{type:'world',room:1,noiseTime:1,grinWarningTimer:0,grinIncoming:false,doorOpening:false,enemies:{}}],['world enemy missing coordinate',{type:'world',room:1,noiseTime:1,grinWarningTimer:0,grinIncoming:false,doorOpening:false,enemies:[{kind:'blob',alive:true,x:0,z:0}]}],['too many enemies',{type:'world',room:1,noiseTime:1,grinWarningTimer:0,grinIncoming:false,doorOpening:false,enemies:Array.from({length:101},()=>({kind:'blob',alive:true,x:0,y:0,z:0}))}]
+];
+for(const [name,value]of invalidMessages)test('reject malformed network message: '+name,()=>assert.equal(api.validPartyMessage(value),false));
+
+for(const action of ['pickup','resonator','door','fire','revive','pers','rift','essence'])test('relay co-op action: '+action,async()=>{
+ const h=relayHarness(),{host,guest,close}=await h.pair();try{let got;host.onMessage=m=>got=m;guest.send({type:'action',room:25,action,id:0});await h.flush();assert.equal(got.action,action);assert.equal(host.pending.size,0);assert.equal(guest.pending.size,0);}finally{close();}
+});
+for(const door of [1,25,75,200,201,300,350,400])test('host snapshot supports dimension door '+door,async()=>{
+ const h=relayHarness(),{host,guest,close}=await h.pair();try{let got;guest.onMessage=m=>got=m;host.send({type:'room',state:{room:door}});await h.flush();assert.equal(got.state.room,door);}finally{close();}
+});
+for(const type of ['hello','room','world'])test('guest cannot send host authority packet '+type,async()=>{
+ const h=relayHarness(),{host,guest,close}=await h.pair();try{let count=0;host.onMessage=()=>count++;guest.send(type==='hello'?{type,state:{room:25},pose:pose()}:type==='room'?{type,state:{room:25}}:{type,room:25,noiseTime:20,grinIncoming:false,grinWarningTimer:0,doorOpening:false,enemies:[]});await h.flush();assert.equal(count,0);}finally{close();}
+});
+
+test('third survivor is rejected and cannot steal an occupied session',async()=>{const h=relayHarness(),p=await h.pair(),third=h.create();try{await assert.rejects(third.join(p.host.code),/two survivors/);assert(p.host.connection.open&&p.guest.connection.open);}finally{third.close();p.close();}});
+test('separate room tokens isolate survivor traffic',async()=>{const h=relayHarness(),p=await h.pair(),other=h.create();try{await other.host('c'.repeat(32));let count=0;other.onMessage=()=>count++;p.host.send({type:'pose',pose:pose()});await h.flush();assert.equal(count,0);}finally{other.close();p.close();}});
+test('reliable actions retry after a lost packet and arrive exactly once',async()=>{const h=relayHarness(),p=await h.pair();try{let drop=true,count=0;h.setDrop(f=>f.payload.payload.kind==='message'&&drop?(drop=false,true):false);p.host.onMessage=()=>count++;p.guest.send({type:'action',room:25,action:'pickup',id:1});await h.flush();assert.equal(count,0);await h.advance(2000);assert.equal(count,1);}finally{p.close();}});
+test('lost acknowledgements trigger replay without duplicate game actions',async()=>{const h=relayHarness(),p=await h.pair();try{let drop=true,count=0;h.setDrop(f=>f.payload.payload.kind==='ack'&&drop?(drop=false,true):false);p.host.onMessage=()=>count++;p.guest.send({type:'dead',room:25});await h.flush();await h.advance(2000);assert.equal(count,1);assert.equal(p.guest.pending.size,0);}finally{p.close();}});
+test('WebSocket interruption reconnects the guest without a new invite',async()=>{const h=relayHarness(),p=await h.pair();try{const code=p.host.code;h.sockets[1].break();await h.advance(1000);assert(p.host.connection.open&&p.guest.connection.open);assert.equal(p.guest.code,code);assert.equal(h.sockets.length,3);}finally{p.close();}});
+test('host WebSocket interruption reconnects and requests a fresh snapshot',async()=>{const h=relayHarness(),p=await h.pair();try{let ready=0;p.host.onMessage=m=>{if(m.type==='ready')ready++;};h.sockets[0].break();await h.advance(1000);assert(p.host.connection.open&&p.guest.connection.open);assert(ready>=1);}finally{p.close();}});
+test('missing host times out with an actionable error',async()=>{const h=relayHarness(),guest=h.create();try{const joining=guest.join('d'.repeat(32));const rejected=assert.rejects(joining,/Host not found/);await h.flush();await h.advance(21000);await rejected;assert.equal(guest.role,null);assert.equal(h.timers.size,0);}finally{guest.close();}});
+test('leaving frees the host slot for a different friend',async()=>{const h=relayHarness(),p=await h.pair(),replacement=h.create();try{p.guest.close();await h.flush();await replacement.join(p.host.code);assert(p.host.connection.open&&replacement.connection.open);}finally{replacement.close();p.close();}});
+test('cancelled join rejects its promise and leaves no reconnect timers',async()=>{const h=relayHarness(),guest=h.create();const pending=guest.join('d'.repeat(32)),rejected=assert.rejects(pending,/cancelled/);await h.flush();guest.close();await rejected;assert.equal(h.timers.size,0);});
+test('malformed relay JSON is ignored without breaking a session',async()=>{const h=relayHarness(),p=await h.pair();try{h.sockets[0].receive('not JSON');h.sockets[0].receive({event:'broadcast',topic:p.host.topic,payload:{event:'ion',payload:null}});assert(p.host.connection.open);}finally{p.close();}});
+test('stale pose updates cannot move a survivor backwards in time',async()=>{const h=relayHarness(),p=await h.pair();try{let count=0;p.guest.onMessage=()=>count++;p.host.send({type:'pose',pose:pose({x:10})});await h.flush();const frame=h.frames.filter(v=>v.frame.event==='broadcast'&&v.frame.payload.payload.message?.type==='pose').at(-1).frame;p.host.send({type:'pose',pose:pose({x:11})});await h.flush();h.sockets[1].receive(frame);assert.equal(count,2);}finally{p.close();}});
+test('a third sender cannot inject post-admission game messages',async()=>{const h=relayHarness(),p=await h.pair();try{let count=0;p.host.onMessage=()=>count++;h.sockets[0].receive({topic:p.host.topic,event:'broadcast',payload:{event:'ion',payload:{v:2,kind:'message',from:'e'.repeat(32),role:'guest',seq:1,message:{type:'dead',room:25}}}});assert.equal(count,0);}finally{p.close();}});
+test('blocked socket buffers drop ephemeral poses without growing a queue',async()=>{const h=relayHarness(),p=await h.pair();try{h.sockets[0].bufferedAmount=300000;for(let i=0;i<100;i++)p.host.send({type:'pose',pose:pose({x:i})});assert.equal(p.host.pending.size,0);}finally{p.close();}});
+test('heartbeat keeps a quiet lobby connected beyond socket idle limits',async()=>{const h=relayHarness(),p=await h.pair();try{await h.advance(60000);assert(p.host.connection.open&&p.guest.connection.open);assert(h.frames.some(f=>f.frame.event==='heartbeat'));}finally{p.close();}});
+test('oversized reliable payloads are dropped before queue allocation',async()=>{const h=relayHarness(),p=await h.pair();try{p.host.send({type:'room',state:{room:25,padding:'x'.repeat(220000)}});assert.equal(p.host.pending.size,0);}finally{p.close();}});
+test('invite generator preserves the deployed subpath and strips stale parameters',()=>{const token=api.randomInviteToken(),url=new URL(api.partyInviteUrl('https://example.test/Ion/?old=true#x',token));assert.equal(url.pathname,'/Ion/');assert.equal(url.hash,'');assert.equal(url.searchParams.get('old'),null);assert.equal(url.searchParams.get('join'),token);});
+test('out-of-order reliable snapshots and actions are buffered until their predecessors arrive',async()=>{const h=relayHarness(),p=await h.pair();try{let held;h.setDrop(f=>{if(f.payload.payload.message?.type==='room'&&f.payload.payload.message.state.room===25){held=f;return true;}return false;});const seen=[];p.guest.onMessage=m=>seen.push(m.state.room);p.host.send({type:'room',state:{room:25}});p.host.send({type:'room',state:{room:26}});await h.flush();assert.equal(seen.length,0);h.sockets[1].receive(held);assert.deepEqual(seen,[25,26]);}finally{p.close();}});
+test('server URL uses TLS and the public key without WebRTC dependencies',()=>{const fs=require('node:fs'),path=require('node:path');const source=fs.readFileSync(path.resolve(__dirname,'../app/multiplayer.ts'),'utf8'),pkg=require('../package.json');assert(!pkg.dependencies.peerjs);assert(!source.includes('RTCPeerConnection'));assert(!source.includes('stun:'));assert(!source.includes('turn:'));});

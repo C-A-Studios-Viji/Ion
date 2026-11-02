@@ -949,6 +949,7 @@ export default function IonGame() {
     party.onConnect=()=>{
       badge("multiplayer");
       if(party.role==="guest")party.send({type:"ready"});
+      else {party.send({type:"hello",state:snapshot(),pose:localPose()});if(screenRef.current==='party'&&!runtime.dead&&!runtime.won)launchRun(false);}
       updateHud(true);
     };
     party.onDisconnect=()=>{runtime.remotePose=null;if(runtime.remoteAvatar)runtime.remoteAvatar.visible=false;updateHud(true);};
@@ -1751,9 +1752,7 @@ export default function IonGame() {
         object.rotation.y = rand() * Math.PI; runtime.roomGroup.add(object);
         if (i < 3) { const glow = new THREE.PointLight(CRYSTALS[key].color,7 + rand()*3,6,2); glow.position.copy(object.position).add(new THREE.Vector3(0, 0.8, 0)); runtime.roomGroup.add(glow); }
       }
-      if(cave){
-        addCaveScenery(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,runtime.layout,room);
-      } else {
+      if(!cave){
         const pipeMaterial=makeAgedMetal();
         addIndustrialScenery(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,room);
         [-1, 1].forEach((side) => addMesh(new THREE.CylinderGeometry(0.12, 0.12, runtime.roomLength - 1, 10), pipeMaterial,
@@ -1930,11 +1929,14 @@ export default function IonGame() {
       });
       // Bedrock is present from the first room, including workshops and halls.
       // Preserve flooded walkways and the Door 300 arena's lethal open void.
-      if(!runtime.resonatorWorld && runtime.layout!=='flooded'){
+      if(!runtime.resonatorWorld){
         const clear=[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position),...runtime.hazards.map(h=>h.object.position)];
-        addRockyCaveFloor(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,clear);
-        runtime.roomGroup.children.filter(o=>o.userData.facilityFloor).forEach(o=>{o.visible=false;});
-        if(cave)addMineralScatter(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,CRYSTALS[formationKey].color,clear);
+        if(runtime.layout!=='flooded'){
+          addRockyCaveFloor(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,clear);
+          runtime.roomGroup.children.filter(o=>o.userData.facilityFloor).forEach(o=>{o.visible=false;});
+        }
+        addCaveScenery(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,runtime.layout,room,clear);
+        if(cave&&runtime.layout!=='flooded')addMineralScatter(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,CRYSTALS[formationKey].color,clear);
       }
       if(runtime.layout!=='standard'&&runtime.layout!=='inversion')badge('secret',`layout-${runtime.layout}`);
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
@@ -2159,11 +2161,11 @@ export default function IonGame() {
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
       if(runtime.encounters.memory?.phase==="reveal"||runtime.encounters.memory?.phase==="quiz"){runtime.running=false;showScreen("memory");}
       if(activeSlotRef.current!==null)saveRun(false);
-      if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock(); updateHud(true);
+      if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock()?.catch(()=>{}); updateHud(true);
     }
     function resume() {
       if (runtime.dead || runtime.won) return; runtime.running = true; runtime.cameraMode = false; showScreen(null); runtime.audio?.resume();
-      if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock();
+      if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock()?.catch(()=>{});
     }
     function kill(reason: string, kind: EnemyKind = "entity") {
       if (runtime.dead || runtime.spawnGrace > 0 && kind !== "noise") return;
@@ -2613,7 +2615,7 @@ export default function IonGame() {
       refreshObjective();
       runtime.audio?.pulse("teleport"); notify(`${kind.toUpperCase()} BANISHED FOR 15 ROOMS`); showScreen("inventory"); updateHud(true);
     }
-    function close() { runtime.cameraMode = false; runtime.running = true; showScreen(null); if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock(); }
+    function close() { runtime.cameraMode = false; runtime.running = true; showScreen(null); if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock()?.catch(()=>{}); }
     function restartCheckpoint() {
       runtime.dead = false; let save = runtime.checkpoint;
       if (!save) { try { const raw = localStorage.getItem("ion-checkpoint"); if (raw) save = JSON.parse(raw) as SaveData; } catch { save = null; } }
@@ -3112,7 +3114,7 @@ export default function IonGame() {
       {screen === "lore" && <MenuShell title="LORE · TEN SOULS" subtitle="Door 201 · each entity remembers its Pers form and the nightmare beneath it" onClose={()=>{}}><div className="lore-scene"><div className="lore-choir" aria-label="The ten entities in their Pers forms">{LORE_NIGHTMARES.map(([name],index)=><span key={name} className={index===hud.loreRoute.scene?"awakening":""} title={name}>✧<small>{name}</small></span>)}</div><div className="lore-pers">PERS FORM · {LORE_NIGHTMARES[hud.loreRoute.scene]?.[0]}</div><strong>{LORE_NIGHTMARES[hud.loreRoute.scene]?.[0]} EMERGES FROM BELOW</strong><p>{LORE_NIGHTMARES[hud.loreRoute.scene]?.[1]}</p><small>{hud.loreRoute.scene+1} / 10</small><button onClick={()=>actionRef.current?.nextLoreScene()}>{hud.loreRoute.scene===9?"BEGIN DOOR 300 MEGA CHASE":"REVEAL THE NEXT NIGHTMARE"}</button></div></MenuShell>}
       {screen === "memory" && <MenuShell title="X::::RamYraM::::X" subtitle={hud.encounters.memory?.phase==="quiz"?"Which number did I show you? A wrong answer grants a random negative Boon.":"Remember this number. I will ask again at a future prime door."} onClose={()=>{}}><div className="memory-trial">{hud.encounters.memory?.phase==="reveal"?<><strong className="memory-number">{hud.encounters.memory.number}</strong><button className="primary-button" onClick={()=>actionRef.current?.rememberNumber()}>I HAVE MEMORIZED IT · CONTINUE</button></>:hud.encounters.memory?.choices.map(answer=><button key={answer} onClick={()=>actionRef.current?.answerMemory(answer)}>{answer}</button>)}</div></MenuShell>}
       {screen==='customize'&&<MenuShell title="SURVIVOR IDENTITY" subtitle="Saved on this browser · visible to your co-op partner" onClose={()=>showScreen(customizeReturn.current)}><div className="customize-layout"><SurvivorPreview appearance={appearance}/><div className="appearance-controls">{(['suit','trim','skin','visor'] as const).map(key=><label key={key}>{key.toUpperCase()}<input type="color" value={appearance[key]} onChange={e=>act?.customize({...appearance,[key]:e.target.value})}/></label>)}<label>HEADGEAR<select value={appearance.helmet} onChange={e=>act?.customize({...appearance,helmet:e.target.value as Appearance['helmet']})}><option value="sealed">Sealed helmet</option><option value="open">Uncovered face</option><option value="hood">Expedition hood</option></select></label><label>BUILD<select value={appearance.build} onChange={e=>act?.customize({...appearance,build:e.target.value as Appearance['build']})}>{['slim','regular','broad'].map(v=><option key={v}>{v}</option>)}</select></label><label>SUIT MARKINGS<select value={appearance.pattern} onChange={e=>act?.customize({...appearance,pattern:e.target.value as Appearance['pattern']})}>{['plain','rescue','hazard'].map(v=><option key={v}>{v}</option>)}</select></label><label>EXPEDITION PACK<input type="checkbox" checked={appearance.backpack} onChange={e=>act?.customize({...appearance,backpack:e.target.checked})}/></label><button onClick={()=>act?.customize(DEFAULT_APPEARANCE)}>RESTORE DEFAULT</button><p>Press V during play or use the camera button to see your character in third person.</p></div></div></MenuShell>}
-      {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle={`You are ${hud.playerName} · two survivors · link invites`} onClose={()=>showScreen(partyRef.current?.role||runtimeRef.current?.room!==1?'pause':'start')}><div className="party-panel"><p role="status">{partyStatus}</p>{inviteLink&&<><label htmlFor="share-link">YOUR INVITE LINK</label><input id="share-link" readOnly value={inviteLink} onFocus={e=>e.target.select()}/><button onClick={()=>{void navigator.clipboard.writeText(inviteLink).then(()=>setInviteCopied(true)).catch(()=>setPartyStatus('Select and copy the invite link above.'));}}>{inviteCopied?'COPIED':'COPY INVITE LINK'}</button></>}{hud.partyConnected&&<p>{hud.playerName} + {hud.teammateName||'SURVIVOR CONNECTED'}</p>}<button onClick={()=>void act?.hostParty()} disabled={Boolean(hud.partyCode)||assetProgress<100}>HOST A RUN · CREATE INVITE</button><label htmlFor="ion-party-code">JOIN FROM A FRIEND’S LINK</label><div className="party-join"><input id="ion-party-code" type="url" value={partyInput} onChange={e=>setPartyInput(e.target.value)} placeholder="Paste ION invite link"/><button disabled={!parsePartyInvite(partyInput)||assetProgress<100} onClick={()=>void act?.joinParty(partyInput)}>JOIN</button></div><p className="party-note">Open the link, then press JOIN. The host must keep the game open. If your network blocks WebRTC, try another network. A new host session needs a new invite.</p>{hud.partyCode&&<><button onClick={()=>act?.resume()}>RETURN TO GAME</button><button onClick={()=>{act?.leaveParty();showScreen('start');}}>LEAVE PARTY</button></>}</div></MenuShell>}
+      {screen === "party" && <MenuShell title="MULTIPLAYER" subtitle={`You are ${hud.playerName} · two survivors · link invites`} onClose={()=>showScreen(partyRef.current?.role||runtimeRef.current?.room!==1?'pause':'start')}><div className="party-panel"><p role="status">{partyStatus}</p>{inviteLink&&<><label htmlFor="share-link">YOUR INVITE LINK</label><input id="share-link" readOnly value={inviteLink} onFocus={e=>e.target.select()}/><button onClick={()=>{void navigator.clipboard.writeText(inviteLink).then(()=>setInviteCopied(true)).catch(()=>setPartyStatus('Select and copy the invite link above.'));}}>{inviteCopied?'COPIED':'COPY INVITE LINK'}</button></>}{hud.partyConnected&&<p>{hud.playerName} + {hud.teammateName||'SURVIVOR CONNECTED'}</p>}<button onClick={()=>void act?.hostParty()} disabled={Boolean(hud.partyCode)||assetProgress<100}>HOST A RUN · CREATE INVITE</button><label htmlFor="ion-party-code">JOIN FROM A FRIEND’S LINK</label><div className="party-join"><input id="ion-party-code" type="url" value={partyInput} onChange={e=>setPartyInput(e.target.value)} placeholder="Paste ION invite link"/><button disabled={!parsePartyInvite(partyInput)||assetProgress<100} onClick={()=>void act?.joinParty(partyInput)}>JOIN</button></div><p className="party-note">Open the link, then press JOIN. Server-connected co-op · no WebRTC. The host keeps the game open. Short interruptions reconnect automatically. Share invites only with your friend. A new host session needs a new invite.</p>{hud.partyCode&&<><button onClick={()=>act?.resume()}>RETURN TO GAME</button><button onClick={()=>{act?.leaveParty();showScreen('start');}}>LEAVE PARTY</button></>}</div></MenuShell>}
 
       {screen === "badges" && <MenuShell title="FACILITY BADGES" subtitle={`${badgeProgress.unlocked.length}/${BADGES.length} unlocked · Daily permission required`} onClose={()=>actionRef.current?.closeBadges()}><div className="badge-code-panel"><label htmlFor="ion-badge-code">DAILY BADGE PERMISSION</label><div className="badge-code-entry"><input id="ion-badge-code" inputMode="text" maxLength={32} value={badgeInput} onChange={event=>setBadgeInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,32))} placeholder="DAILY PERMISSION"/><button disabled={!badgeInput} onClick={()=>actionRef.current?.redeemBadgeCode(badgeInput)}>AUTHORIZE</button></div><small>{permissionDate===permissionDay()?"Authorized today · select a badge below":"Badge awards are locked until today’s permission is entered."}</small></div><div className="badge-grid">{BADGES.map(b=>{const earned=badgeProgress.unlocked.includes(b.id);const rarity=b.rarity??"standard";const classified=rarity==="starplus"&&!earned&&permissionDate!==permissionDay();const rarityLabel=rarity==="starplus"?"*+*":rarity==="plus"?"+":rarity.toUpperCase();return <article key={b.id} className={`${earned?"earned":"locked"} badge-${rarity}`}><span>{earned?"★ EARNED":"◇ LOCKED"} · {rarityLabel}</span><strong>{classified?"CLASSIFIED":b.title}</strong><p>{classified?"This badge can only be given by a secret facility condition.":b.description}</p>{!classified&&b.tutorial&&<small>FIELD TUTORIAL: {b.tutorial}</small>}{!earned&&permissionDate===permissionDay()&&<button onClick={()=>actionRef.current?.grantBadge(b.id)}>SELECT THIS BADGE</button>}</article>})}</div></MenuShell>}
       {screen === "win" && <section className="win-screen overlay-panel"><span className="eyebrow">EXTRACTION ROOM · SIGNAL RESTORED</span><h2>YOU REACHED<br /><strong>ROOM 200</strong></h2><p>Every infusion is stable. The blast doors open. Something below them keeps smiling.</p><div className="completion-ring" style={{ "--completion": `${discoveredPercent}%` } as React.CSSProperties}><span>7 / 7</span><small>INFUSIONS</small></div><button className="primary-button" onClick={() => actionRef.current?.start(true)}>DESCEND AGAIN</button><button className="text-button" onClick={() => actionRef.current?.exploreExtraction()}>EXPLORE EXTRACTION</button></section>}

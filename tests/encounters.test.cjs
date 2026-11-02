@@ -521,21 +521,14 @@ test('third person uses an articulated customised survivor, saves appearance, an
 
 
 test('an invite guest enters the host run directly, exchanges appearance, and follows room changes',async()=>{
- const hosts=new Map();let next=0;
- class Link {
-  role=null;code='';playerName='Survivor'+(++next);connection=null;other=null;
-  onMessage=()=>{};onStatus=()=>{};onConnect=()=>{};onDisconnect=()=>{};
-  async host(){this.code='a'.repeat(32);this.role='host';hosts.set(this.code,this);return this.code;}
-  async join(token){const h=hosts.get(token);assert(h);this.role='guest';this.code=token;this.other=h;h.other=this;this.connection=h.connection={open:true};h.onConnect();this.onConnect();}
-  send(message){if(this.connection?.open)queueMicrotask(()=>this.other.onMessage(structuredClone(message)));}
-  close(){if(this.role==='host')hosts.delete(this.code);this.role=null;this.code='';this.connection=null;}
- }
+ const relay=require('./multiplayerHarness.cjs').relayHarness();
+ class Link extends relay.api.PartyLink{constructor(){super(relay.options);}}
  const host=gameHarness(true,Link),guest=gameHarness(true,Link);await Promise.resolve();await Promise.resolve();
  host.enter(42);host.runtime.enemies=[];host.runtime.hazards=[];host.runtime.noiseActive=false;
  host.act.customize({...host.runtime.appearance,suit:'#123456'});await host.act.hostParty();
- await guest.act.joinParty('https://c-a-studios-viji.github.io/Ion/?join='+ 'a'.repeat(32));await new Promise(resolve=>setImmediate(resolve));
+ await guest.act.joinParty('https://c-a-studios-viji.github.io/Ion/?join='+relay.sockets[0].topic.replace('realtime:ion-v2-',''));await new Promise(resolve=>setImmediate(resolve));
  assert.equal(guest.runtime.room,42);assert.equal(guest.runtime.running,true);assert.equal(guest.screen(),null);assert.equal(guest.runtime.remotePose.appearance.suit,'#123456');
- host.enter(43);await new Promise(resolve=>setImmediate(resolve));assert.equal(guest.runtime.room,43);assert.equal(guest.screen(),null);assert.equal(guest.runtime.running,true);
+ host.enter(43);await new Promise(resolve=>setImmediate(resolve));assert.equal(guest.runtime.room,43);assert.equal(guest.screen(),null);assert.equal(guest.runtime.running,true);host.act.leaveParty();guest.act.leaveParty();
 });
 
 test('cinematic cave shells face inward, preserve the exit and stay within geometry budgets',()=>{
@@ -543,10 +536,10 @@ test('cinematic cave shells face inward, preserve the exit and stay within geome
  const group=new THREE.Group(),detail=addCaveScenery(group,18,26,7,'standard',2);assert(detail.userData.cosmeticOnly);assert(detail.userData.layoutGeometry);
  const walls=detail.children.filter(o=>o.name==='folded-rock-wall');assert.equal(walls.length,2);
  walls.forEach((wall,i)=>{const normal=wall.geometry.attributes.normal;let x=0;for(let n=0;n<normal.count;n++)x+=normal.getX(n);assert(i===0?x>0:x<0);});
- const vault=detail.getObjectByName('broken-cave-vault');assert(vault);const normals=vault.geometry.attributes.normal;for(let i=0;i<normals.count;i++)assert(normals.getY(i)<-.6);
+ const vault=detail.getObjectByName('broken-cave-vault');assert(vault);const normals=vault.geometry.attributes.normal;for(let i=0;i<normals.count;i++)assert(normals.getY(i)<-.4);
  let vertices=0,instances=0;
  detail.traverse(o=>{if(o.isMesh){vertices+=o.geometry.attributes.position.count;for(const v of o.geometry.attributes.position.array)assert(Number.isFinite(v));if(o.isInstancedMesh)instances+=o.count;}});
- assert(vertices<24000);assert(instances>80&&instances<500);
+ assert(vertices<90000);assert.equal(instances,0);assert(detail.children.filter(o=>o.name==='layered-wall-fragments').every(o=>o.userData.rockCount>20));
  const obstacles=h.runtime.obstacles.length;addCaveScenery(h.runtime.roomGroup,18,26,7,'standard',2);assert.equal(h.runtime.obstacles.length,obstacles);
 });
 
@@ -643,4 +636,49 @@ test('bedrock renders from above in entry halls and workshops, while floating ar
  const rainbow={kind:'rainbow',object:new THREE.Group()};h.runtime.stations.push(rainbow);h.runtime.nearest={kind:'station',index:h.runtime.stations.indexOf(rainbow)};h.act.interact();
  assert.equal(h.runtime.resonatorWorld,true);
  assert(!h.runtime.roomGroup.getObjectByName('cave-floor-decoration'),'terrain must never fill the lethal arena void');
+});
+
+test('rounded cave walls join the ceiling crown and keep a clear exit aperture',()=>{
+ const h=gameHarness(),{addCaveScenery}=h.load(path.join(root,'app/caveScenery.ts'));
+ const group=addCaveScenery(new THREE.Group(),18,28,7,'standard',17);
+ group.updateMatrixWorld(true);
+ const walls=group.children.filter(o=>o.name==='folded-rock-wall'),vault=group.getObjectByName('broken-cave-vault');
+ const vp=vault.geometry.attributes.position,cols=Math.ceil(28/.45),across=Math.ceil(18/.45);
+ for(let side=0;side<2;side++){
+  const wp=walls[side].geometry.attributes.position;
+  for(let z=0;z<=cols;z++){
+   const wi=28*(cols+1)+z,vi=(side===0?0:across)*(cols+1)+z;
+   for(const key of ['getX','getY','getZ'])assert(Math.abs(wp[key](wi)-vp[key](vi))<1e-5,'wall/vault seam');
+  }
+ }
+ const exit=group.getObjectByName('cave-exit-rock');
+ const ray=new THREE.Raycaster(new THREE.Vector3(0,2,-10),new THREE.Vector3(0,0,-1));assert.equal(ray.intersectObject(exit).length,0,'rock closes the door');
+ const sideRay=new THREE.Raycaster(new THREE.Vector3(5,2,-10),new THREE.Vector3(0,0,-1));assert(sideRay.intersectObject(exit).length>0,'end wall missing');
+ const ceilingRay=new THREE.Raycaster(new THREE.Vector3(0,3,0),new THREE.Vector3(0,1,0));assert(ceilingRay.intersectObject(vault).length>0,'ceiling back-faced');
+});
+
+test('strong cave relief stays below eye height and softens around mining objectives',()=>{
+ const h=gameHarness(),{addRockyCaveFloor,caveFloorRelief}=h.load(path.join(root,'app/caveFloor.ts'));
+ const clear=[new THREE.Vector3(2,0,2)],g=addRockyCaveFloor(new THREE.Group(),24,44,'standard',7,clear),p=g.getObjectByName('uneven-cave-skin').geometry.attributes.position;
+ let min=100,max=-100;for(let i=0;i<p.count;i++){min=Math.min(min,p.getY(i));max=Math.max(max,p.getY(i));assert(p.getY(i)<1.4);}
+ assert(max-min>.85,'ground still looks flat');assert(caveFloorRelief(2,2,24,44,clear)<.2,'objective buried');
+ const normal=g.getObjectByName('uneven-cave-skin').geometry.attributes.normal;for(let i=0;i<normal.count;i++)assert(normal.getY(i)>0);
+});
+
+test('continuous cave envelope uses portable stock materials across every room profile',()=>{
+ const h=gameHarness(),{addCaveScenery}=h.load(path.join(root,'app/caveScenery.ts'));
+ for(const type of ['standard','grand','duplex','multifloor','basement','maze','collapsed','observation','inversion']){
+  const g=addCaveScenery(new THREE.Group(),24,44,type==='multifloor'?12:9,type,11);
+  for(const object of g.children.filter(m=>['folded-rock-wall','broken-cave-vault','cave-entry-rock','cave-exit-rock','layered-wall-fragments'].includes(m.name))){
+   assert(!object.isInstancedMesh);assert(object.material.isMeshStandardMaterial);assert.equal(object.material.onBeforeCompile,THREE.Material.prototype.onBeforeCompile);assert(object.material.map.isDataTexture);
+   for(const key of ['position','normal','uv','color'])for(const value of object.geometry.attributes[key].array)assert(Number.isFinite(value));
+  }
+ }
+});
+
+test('entry rooms have floor-to-ceiling cave coverage in both modes and no solid shell fills the arena',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.enter(1);
+ const r=h.runtime,shell=r.roomGroup.getObjectByName('cinematic-cave-shell');assert(shell);assert(shell.getObjectByName('cave-entry-rock'));assert(shell.getObjectByName('cave-exit-rock'));
+ h.act.toggleGraphics();h.step();assert.equal(r.roomGroup.getObjectByName('cinematic-cave-shell'),shell);assert(shell.visible);
+ const rainbow={kind:'rainbow',object:new THREE.Group()};r.stations.push(rainbow);r.nearest={kind:'station',index:r.stations.indexOf(rainbow)};h.act.interact();assert(r.resonatorWorld);assert(!r.roomGroup.getObjectByName('cinematic-cave-shell'));
 });

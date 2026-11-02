@@ -17,18 +17,22 @@ function slabGeometry(){
  }
  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(points,3));g.setIndex(indices);g.computeVertexNormals();return g.toNonIndexed();
 }
+export function caveFloorRelief(x:number,z:number,width:number,length:number,clearPoints:THREE.Vector3[]=[]){
+ const edge=THREE.MathUtils.smoothstep(Math.abs(x),width*.18,width*.45);
+ const ridge=Math.pow(.5+.5*Math.sin(x*1.3+z*.54+Math.sin(z*.31)),3);
+ const folds=Math.pow(.5+.5*Math.sin(x*.68-z*.81),4);
+ const bed=.07+ridge*(.38+edge*.52)+folds*.19+Math.abs(Math.sin(x*2.8-z*1.7))*.07;
+ const distance=clearPoints.reduce((d,p)=>Math.min(d,Math.hypot(p.x-x,p.z-z)),Infinity);
+ // Soft clearance avoids sharp circular pits beneath stations and crystals.
+ const clearance=THREE.MathUtils.lerp(.12,1,THREE.MathUtils.smoothstep(distance,1.05,1.85));
+ const threshold=THREE.MathUtils.smoothstep(length/2-Math.abs(z),.4,3.2);
+ return .012+bed*clearance*threshold;
+}
 export function addRockyCaveFloor(group:THREE.Group,width:number,length:number,type:RoomType,seed:number,clearPoints:THREE.Vector3[]){
  let state=(seed*1931+17)>>>0;const rand=()=>{state=(Math.imul(state,1664525)+1013904223)>>>0;return state/4294967296;};
  const detail=new THREE.Group();detail.name='cave-floor-decoration';detail.userData.cosmeticOnly=true;detail.userData.layoutGeometry=true;
  const isClear=(x:number,z:number,radius:number)=>clearPoints.some(p=>Math.hypot(p.x-x,p.z-z)<Math.max(1.15,radius+.5));
- const reliefAt=(x:number,z:number)=>{
-  const edge=THREE.MathUtils.smoothstep(Math.abs(x),width*.22,width*.46);
-  const ridge=Math.pow(.5+.5*Math.sin(x*1.3+z*.54+Math.sin(z*.31)),3);
-  const bed=.045+ridge*(.19+edge*.42)+Math.abs(Math.sin(x*2.8-z*1.7))*.045;
-  const clearance=isClear(x,z,.1)?.22:1;
-  const threshold=THREE.MathUtils.smoothstep(length/2-Math.abs(z),.4,3.2);
-  return .012+bed*clearance*threshold;
- };
+ const reliefAt=(x:number,z:number)=>caveFloorRelief(x,z,width,length,clearPoints);
  // Full-width rock shell covers the old plane. Slow broad strata stay readable
  // at eye height; only small relief is used underneath interactable objects.
  const indexed=new THREE.PlaneGeometry(width,length,Math.ceil(width*2.5),Math.ceil(length*2.5)),p=indexed.attributes.position;
@@ -52,7 +56,7 @@ export function addRockyCaveFloor(group:THREE.Group,width:number,length:number,t
    const x=(rand()-.5)*(width-1),z=(rand()-.5)*(length-2),radius=large?.42+rand()*.65:.055+rand()*.13;
    if(Math.abs(z)>length/2-2.6||isClear(x,z,radius))continue;
    const side=THREE.MathUtils.smoothstep(Math.abs(x),width*.18,width*.45);
-   const sy=large?.09+rand()*.12+side*(.14+rand()*.22):.035+rand()*.065;
+   const sy=large?.15+rand()*.19+side*(.18+rand()*.24):.035+rand()*.065;
    const y=roomFloor(type,length,z)+reliefAt(x,z)*.55;
    const q=new THREE.Quaternion().setFromEuler(new THREE.Euler((rand()-.5)*.12,rand()*Math.PI*2,(rand()-.5)*.1));
    matrix.compose(new THREE.Vector3(x,y,z),q,new THREE.Vector3(radius,sy,radius*(.6+rand()*.6)));normalMatrix.getNormalMatrix(matrix);centers.push([x,y,z]);
