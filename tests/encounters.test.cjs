@@ -528,6 +528,14 @@ test('an invite guest enters the host run directly, exchanges appearance, and fo
  host.act.customize({...host.runtime.appearance,suit:'#123456'});await host.act.hostParty();
  await guest.act.joinParty('https://c-a-studios-viji.github.io/Ion/?join='+relay.sockets[0].topic.replace('realtime:ion-v2-',''));await new Promise(resolve=>setImmediate(resolve));
  assert.equal(guest.runtime.room,42);assert.equal(guest.runtime.running,true);assert.equal(guest.screen(),null);assert.equal(guest.runtime.remotePose.appearance.suit,'#123456');
+ const mineralState=r=>r.pickups.filter(p=>p.object.userData.sideMineral).map(p=>[p.object.userData.pickupId,...p.object.position.toArray()]);
+ assert.equal(JSON.stringify(mineralState(guest.runtime)),JSON.stringify(mineralState(host.runtime)));
+ const deposit=host.runtime.pickups.find(p=>p.object.userData.sideMineral),id=deposit.object.userData.pickupId;
+ for(let hit=0;hit<3;hit++){host.runtime.mineSwing=0;host.runtime.nearest={kind:'pickup',index:host.runtime.pickups.indexOf(deposit)};host.act.interact();}
+ await new Promise(resolve=>setImmediate(resolve));
+ assert(!host.runtime.pickups.some(p=>p.object.userData.pickupId===id));
+ assert(!guest.runtime.pickups.some(p=>p.object.userData.pickupId===id),'peer did not remove the mined side formation');
+
  host.enter(43);await new Promise(resolve=>setImmediate(resolve));assert.equal(guest.runtime.room,43);assert.equal(guest.screen(),null);assert.equal(guest.runtime.running,true);host.act.leaveParty();guest.act.leaveParty();
 });
 
@@ -591,7 +599,7 @@ test('scattered mineral pockets vary in height, are deterministic and leave obje
  assert(Math.max(...points.map(p=>p.height))-Math.min(...points.map(p=>p.height))>.8);
  const sceneGroup=new THREE.Group(),detail=addMineralScatter(sceneGroup,20,35,'multifloor',42,0x30ba77,clear);assert(detail.userData.cosmeticOnly);assert.equal(detail.children.length,2);
  const {roomFloor}=h.load(path.resolve(__dirname,'../app/roomTypes.ts'));
- const crystals=detail.getObjectByName('scattered-clear-crystals'),matrix=new THREE.Matrix4(),p=new THREE.Vector3();for(let i=0;i<crystals.count;i++){crystals.getMatrixAt(i,matrix);p.setFromMatrixPosition(matrix);assert(Math.abs(p.y-(roomFloor('multifloor',35,p.z)+.1))<.0001);}
+ const crystals=detail.getObjectByName('scattered-clear-crystals'),matrix=new THREE.Matrix4(),p=new THREE.Vector3();for(let i=0;i<crystals.count;i++){crystals.getMatrixAt(i,matrix);p.setFromMatrixPosition(matrix);const relief=h.load(path.join(root,'app/caveFloor.ts')).caveFloorRelief(p.x,p.z,20,35,clear);assert(Math.abs(p.y-(roomFloor('multifloor',35,p.z)+relief+.1))<.0001);}
 });
 
 test('all sixteen creatures gain detailed anatomy without losing animation or distinctive surface styles',()=>{
@@ -681,4 +689,63 @@ test('entry rooms have floor-to-ceiling cave coverage in both modes and no solid
  const r=h.runtime,shell=r.roomGroup.getObjectByName('cinematic-cave-shell');assert(shell);assert(shell.getObjectByName('cave-entry-rock'));assert(shell.getObjectByName('cave-exit-rock'));
  h.act.toggleGraphics();h.step();assert.equal(r.roomGroup.getObjectByName('cinematic-cave-shell'),shell);assert(shell.visible);
  const rainbow={kind:'rainbow',object:new THREE.Group()};r.stations.push(rainbow);r.nearest={kind:'station',index:r.stations.indexOf(rainbow)};h.act.interact();assert(r.resonatorWorld);assert(!r.roomGroup.getObjectByName('cinematic-cave-shell'));
+});
+
+
+test('ordinary doors repeat the requested ten-layout cycle from the first door',()=>{
+ const h=gameHarness(),types=h.load(path.join(root,'app/roomTypes.ts'));
+ const expected=['standard','basement','duplex','grand','maze','multifloor','inversion','collapsed','flooded','observation'];
+ for(let room=1;room<=80;room++){
+  assert.equal(types.roomTypeFor(room),room===32?'standard':expected[(room-1)%10]);
+  if(room>1&&room!==32)assert.notEqual(types.roomTypeFor(room),types.roomTypeFor(room-1));
+ }
+ for(let room=1;room<=10;room++){h.enter(room);assert.equal(h.runtime.layout,expected[room-1]);}
+ assert.equal(h.runtime.layout,'observation');
+});
+
+test('bedrock texture coordinates wrap continuously from the floor up both walls onto the ceiling',()=>{
+ const h=gameHarness(),{addCaveScenery}=h.load(path.join(root,'app/caveScenery.ts'));
+ const width=18,length=28,height=7,half=width/2-.26,lower=.95;
+ const shell=addCaveScenery(new THREE.Group(),width,length,height,'standard',4);
+ const walls=shell.children.filter(o=>o.name==='folded-rock-wall'),vault=shell.getObjectByName('broken-cave-vault');
+ const cols=Math.ceil(length/.45),across=Math.ceil(width/.45),roofUV=vault.geometry.attributes.uv;
+ for(let side=0;side<2;side++){
+  const uv=walls[side].geometry.attributes.uv;
+  for(let z=0;z<=cols;z++){
+   assert(Math.abs(uv.getX(z)-(side===0?-1:1)*(half-lower)/2.4)<1e-5);
+   assert(Math.abs(uv.getY(z)-(-length/2+z*length/cols)/2.4)<1e-5);
+   const wallIndex=28*(cols+1)+z,roofIndex=(side===0?0:across)*(cols+1)+z;
+   assert(Math.abs(uv.getX(wallIndex)-roofUV.getX(roofIndex))<1e-5);
+   assert(Math.abs(uv.getY(wallIndex)-roofUV.getY(roofIndex))<1e-5);
+  }
+ }
+});
+
+test('every side formation and scattered point mines, awards its mineral and stays mined after saving',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();
+ // The starting Resonance Gallery has both formations and scattered growth.
+ h.enter(1);const r=h.runtime;
+ const minerals=r.pickups.filter(p=>p.object.userData.sideMineral);assert(minerals.length>15);
+ assert(minerals.some(p=>p.object.name==='mineral-geode'));
+ assert(minerals.some(p=>p.object.name==='mineable-scattered-crystal'));
+ const ids=minerals.map(p=>p.object.userData.pickupId);assert.equal(new Set(ids).size,ids.length);
+ const positions=new Map(minerals.map(p=>[p.object.userData.pickupId,p.object.position.toArray()]));
+ const removed=minerals.slice(0,3);const partial=minerals.at(-1);
+ partial.object.userData.mineHits=1;
+ for(const p of removed){
+  const before=r.crystals[p.crystal];
+  for(let hit=0;hit<3;hit++){r.mineSwing=0;r.nearest={kind:'pickup',index:r.pickups.indexOf(p)};h.act.interact();}
+  assert(!r.pickups.includes(p));assert.equal(r.crystals[p.crystal],before+1);
+ }
+ h.act.saveRun();h.act.loadSlot(0);h.act.confirmBoons();
+ for(const p of removed)assert(!r.pickups.some(v=>v.object.userData.pickupId===p.object.userData.pickupId));
+ const restored=r.pickups.find(p=>p.object.userData.pickupId===partial.object.userData.pickupId);assert(restored);assert.equal(restored.object.userData.mineHits,1);
+ for(const p of r.pickups.filter(p=>p.object.userData.sideMineral))assert.deepEqual(p.object.position.toArray(),positions.get(p.object.userData.pickupId));
+ // Exercise the real pickaxe path for all remaining deposits, including each instance proxy.
+ for(const p of [...r.pickups.filter(p=>p.object.userData.sideMineral)]){
+  for(let hit=0;hit<3&&r.pickups.includes(p);hit++){r.mineSwing=0;r.nearest={kind:'pickup',index:r.pickups.indexOf(p)};h.act.interact();}
+  assert(!r.pickups.includes(p));
+ }
+ const scatter=r.roomGroup.getObjectByName('scattered-clear-crystals'),m=new THREE.Matrix4();
+ for(let i=0;i<scatter.count;i++){scatter.getMatrixAt(i,m);assert.equal(m.elements[0],0);assert.equal(m.elements[5],0);assert.equal(m.elements[10],0);}
 });
