@@ -50,7 +50,7 @@ export function addRockyCaveFloor(group:THREE.Group,width:number,length:number,t
  for(const large of [false,true]){
   const source=slabGeometry(),points=source.attributes.position,normals=source.attributes.normal;
   const out:number[]=[],outNormals:number[]=[],outColors:number[]=[],outUVs:number[]=[],centers:number[][]=[];
-  const attempts=Math.min(large?180:600,Math.ceil(width*length*(large?.26:1.25))),matrix=new THREE.Matrix4(),normalMatrix=new THREE.Matrix3(),v=new THREE.Vector3(),n=new THREE.Vector3();
+  const attempts=Math.min(large?100:240,Math.ceil(width*length*(large?.26:1.25))),matrix=new THREE.Matrix4(),normalMatrix=new THREE.Matrix3(),v=new THREE.Vector3(),n=new THREE.Vector3();
   for(let i=0;i<attempts;i++){
    // A jittered field avoids the previous gravel-pile distribution.
    const x=(rand()-.5)*(width-1),z=(rand()-.5)*(length-2),radius=large?.42+rand()*.65:.055+rand()*.13;

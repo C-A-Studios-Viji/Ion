@@ -1650,7 +1650,7 @@ export default function IonGame() {
       if(restore?.winQuestBlob!==undefined)runtime.winQuestBlob=restore.winQuestBlob;
       if(restore?.winBadgeSpawned!==undefined)runtime.winBadgeSpawned=restore.winBadgeSpawned;
       if (room > previousRoom && runtime.speedBoostRooms > 0) runtime.speedBoostRooms -= 1;
-      runtime.tier = Math.min(7, Math.floor((room - 1) / 25)); runtime.roomName = roomIdentity(room);
+      runtime.tier = Math.min(7, Math.floor((room - 1) / 25)); runtime.roomName = room===1 ? ROOM_LABELS.standard : roomIdentity(room);
       runtime.chaseState = runtime.paradoxWorld || runtime.ascendedWorld ? null : restore?.chaseState ?? chaseForRoom(room,runtime.chaseState,Math.random(),(runtime.banishedUntil.remetons ?? 0)>=room);
       runtime.chaseRoom = !!runtime.chaseState; runtime.chaseLevel = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).level : 0;
       if (runtime.chaseState) runtime.roomName = `${runtime.chaseState.type === "remetons" ? "Infected Pers" : "Blob"} Pursuit · ${room-runtime.chaseState.start+1}/5`;
@@ -1743,13 +1743,15 @@ export default function IonGame() {
         : runtime.roomName.includes("Amethyst") ? "amethyst" : runtime.roomName.includes("Quartz") ? "quartz"
           : runtime.roomName.includes("Corrupted") || runtime.tier > 5 ? "corrupted"
             : FOUND_CRYSTAL_KEYS[Math.floor(rand() * Math.min(FOUND_CRYSTAL_KEYS.length, 2 + runtime.tier))];
+      const mineableFormations:{object:THREE.Group;key:CrystalKey}[]=[];
       const formationCount = 6 + Math.floor(rand() * 5) + runtime.tier;
       for (let i = 0; i < formationCount; i += 1) {
         const side = rand() < 0.5 ? -1 : 1;
         const key = rand() < 0.72 ? formationKey : FOUND_CRYSTAL_KEYS[Math.floor(rand() * Math.min(FOUND_CRYSTAL_KEYS.length, 2 + runtime.tier))];
         const object = createCrystal(key, 0.6 + rand() * 1.25);
-        object.position.set(side * (runtime.roomWidth / 2 - 0.55 - rand() * 0.8), 0, (rand() - 0.5) * (runtime.roomLength - 4));
+        object.position.set(side * (runtime.roomWidth / 2 - 1.65 - rand() * 0.6), 0, (rand() - 0.5) * (runtime.roomLength - 4));
         object.rotation.y = rand() * Math.PI; runtime.roomGroup.add(object);
+        mineableFormations.push({object,key});
         if (i < 3) { const glow = new THREE.PointLight(CRYSTALS[key].color,7 + rand()*3,6,2); glow.position.copy(object.position).add(new THREE.Vector3(0, 0.8, 0)); runtime.roomGroup.add(glow); }
       }
       if(!cave){
@@ -1884,6 +1886,9 @@ export default function IonGame() {
         try { localStorage.setItem("ion-checkpoint", JSON.stringify(runtime.checkpoint)); } catch { /* best effort */ }
         notify(`CHASE ${runtime.chaseLevel}/7 · THE BLOB IS BEHIND YOU`);
       }
+      // Capture generation positions before removed pickups and a restored
+      // player position can change the decorative seed layout.
+      const mineralClear=[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position),...runtime.hazards.map(h=>h.object.position),...mineableFormations.map(f=>f.object.position)].map(p=>p.clone());
       if(restore){
         runtime.removedPickups=new Set(restore.removedPickups ?? []);
         runtime.pickups=runtime.pickups.filter(p=>{
@@ -1918,8 +1923,22 @@ export default function IonGame() {
           runtime.won = true; runtime.running = false; showScreen("win"); if (document.pointerLockElement) document.exitPointerLock();
         } else { runtime.doorUnlocked = false; runtime.objective = `Extraction denied · ${runtime.discovered.size}/7 infusions`; }
       }
-      if(runtime.layout!=='inversion')buildEntityEvents(restore);
+      buildEntityEvents(restore);
       finishRoomLayout(Boolean(restore));
+      // Decorative deposits use a separate stable ID range so old objective
+      // pickup IDs, save files and host/guest actions retain their meaning.
+      let mineralId=1000;
+      const registerMineral=(object:THREE.Group,key:CrystalKey,onMined?:()=>void)=>{
+        object.userData.pickupId=mineralId++;object.userData.crystal=key;
+        object.userData.sideMineral=true;object.userData.onMined=onMined;
+        if(runtime.removedPickups.has(object.userData.pickupId)){
+          onMined?.();runtime.roomGroup.remove(object);disposeModel(object);return;
+        }
+        object.userData.mineHits=restore?.miningProgress?.[`p${object.userData.pickupId}`]??0;
+        if(!object.parent)runtime.roomGroup.add(object);
+        runtime.pickups.push({object,kind:'crystal',crystal:key,mandatory:false});
+      };
+      mineableFormations.forEach(({object,key})=>registerMineral(object,key));
       // Mining needs a stable interaction window: vortices must not pull a player
       // away from deposits, capsules or required resonators between strikes.
       const miningTasks=[...runtime.pickups.filter(p=>p.kind==='crystal'||p.object.userData.sealedCapsule).map(p=>p.object),...runtime.stations.filter(v=>v.kind==='resonator').map(v=>v.object)];
@@ -1936,7 +1955,10 @@ export default function IonGame() {
           runtime.roomGroup.children.filter(o=>o.userData.facilityFloor).forEach(o=>{o.visible=false;});
         }
         addCaveScenery(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,runtime.layout,room,clear);
-        if(cave&&runtime.layout!=='flooded')addMineralScatter(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,CRYSTALS[formationKey].color,clear);
+        if(cave&&runtime.layout!=='flooded')addMineralScatter(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,CRYSTALS[formationKey].color,mineralClear,(position,remove)=>{
+          const anchor=new THREE.Group();anchor.name='mineable-scattered-crystal';anchor.position.copy(position);
+          registerMineral(anchor,formationKey,remove);
+        });
       }
       if(runtime.layout!=='standard'&&runtime.layout!=='inversion')badge('secret',`layout-${runtime.layout}`);
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
@@ -1977,7 +1999,7 @@ export default function IonGame() {
     }
     function buildEntityEvents(restore?:SaveData){
       const events=runtime.encounters;
-      const eligible=party.role!=="guest"&&!runtime.paradoxWorld&&!runtime.ascendedWorld&&!runtime.resonatorWorld&&!runtime.chaseRoom&&!runtime.haidIniActive&&!runtime.persHubActive&&runtime.room>=5&&runtime.room<170;
+      const eligible=runtime.layout!=="inversion"&&party.role!=="guest"&&!runtime.paradoxWorld&&!runtime.ascendedWorld&&!runtime.resonatorWorld&&!runtime.chaseRoom&&!runtime.haidIniActive&&!runtime.persHubActive&&runtime.room>=5&&runtime.room<170;
       if(!restore&&eligible&&!events.voidSeen&&!events.voidDebt&&!events.memory&&Math.random()<.025){events.voidSeen=true;events.voidDebt={paid:0,doorsLeft:20,lastRoom:runtime.room};notify("VOID · 50 CRYSTALS · TWENTY DOORS TO PAY");}
       if(events.voidDebt){
         if(events.voidDebt.doorsLeft<=0){runtime.spawnGrace=0;runtime.wardCharges=0;runtime.basdinos=0;kill("VOID · TWENTY DOORS · DEBT UNPAID","void");return;}
@@ -2284,6 +2306,7 @@ export default function IonGame() {
       const pickupId=pickup.object.userData.pickupId as number;
       if(!fromPeer)partyRef.current?.send({type:"action",room:runtime.room,action:"pickup",id:pickupId});
       runtime.removedPickups.add(pickupId);
+      pickup.object.userData.onMined?.();
       runtime.roomGroup.remove(pickup.object); disposeModel(pickup.object); runtime.pickups.splice(index, 1); runtime.audio?.pulse("pickup");
       if(pickup.kind==="glassShard"||pickup.kind==="glue"){runtime.inventory[pickup.kind]++;notify(pickup.kind==='glassShard'?"JAR SHARD +1 · REPAIR WITH GLUE IN INVENTORY":"GLUE +1");
       } else if(pickup.kind==="candy"){

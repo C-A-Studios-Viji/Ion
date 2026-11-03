@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {caveFloorRelief} from './caveFloor';
 import {fractureGeometry} from './caveScenery';
 import {makeRockMaterial} from './rockMaterials';
 import {crystalMaterial} from './crystalOptics';
@@ -57,14 +58,17 @@ export function planMineralScatter(w:number,l:number,seed:number,clear:THREE.Vec
  }
  return points;
 }
-export function addMineralScatter(group:THREE.Group,w:number,l:number,type:RoomType,seed:number,color:number,clear:THREE.Vector3[]){
+export function addMineralScatter(group:THREE.Group,w:number,l:number,type:RoomType,seed:number,color:number,clear:THREE.Vector3[],onMineral?:(position:THREE.Vector3,remove:()=>void)=>void){
  const points=planMineralScatter(w,l,seed,clear),root=new THREE.Group();root.name='scattered-cave-minerals';root.userData.cosmeticOnly=true;root.userData.layoutGeometry=true;
  if(!points.length)return root;
  const shards=new THREE.InstancedMesh(crystalGeometry(color),crystalMaterial(color),points.length),transform=new THREE.Object3D();
  const host=new THREE.InstancedMesh(fractureGeometry(0),makeRockMaterial('slab'),points.length);
  points.forEach((p,i)=>{
-  const floor=roomFloor(type,l,p.z);transform.position.set(p.x,floor+.1,p.z);transform.rotation.set(p.lean,p.yaw,p.lean*.7);transform.scale.set(p.width,p.height,p.width*.8);transform.updateMatrix();shards.setMatrixAt(i,transform.matrix);
-  transform.position.y=floor+.04;transform.rotation.set(0,p.yaw,.06);transform.scale.set(p.width*.3,.065,p.width*.28);transform.updateMatrix();host.setMatrixAt(i,transform.matrix);
+  const floor=roomFloor(type,l,p.z);const relief=caveFloorRelief(p.x,p.z,w,l,clear);transform.position.set(p.x,floor+relief+.1,p.z);transform.rotation.set(p.lean,p.yaw,p.lean*.7);transform.scale.set(p.width,p.height,p.width*.8);transform.updateMatrix();shards.setMatrixAt(i,transform.matrix);
+  // Keep the efficient shared mesh, with a mineable anchor for every point.
+  const anchor=transform.position.clone();
+  transform.position.y=floor+relief+.04;transform.rotation.set(0,p.yaw,.06);transform.scale.set(p.width*.3,.065,p.width*.28);transform.updateMatrix();host.setMatrixAt(i,transform.matrix);
+  onMineral?.(anchor,()=>{const hidden=new THREE.Matrix4().makeScale(0,0,0);shards.setMatrixAt(i,hidden);host.setMatrixAt(i,hidden);shards.instanceMatrix.needsUpdate=true;host.instanceMatrix.needsUpdate=true;});
  });
  shards.name='scattered-clear-crystals';shards.castShadow=false;shards.receiveShadow=true;shards.computeBoundingSphere();host.castShadow=true;host.receiveShadow=true;host.computeBoundingSphere();root.add(shards,host);group.add(root);return root;
 }

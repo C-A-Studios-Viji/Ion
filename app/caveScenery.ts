@@ -37,6 +37,19 @@ export function addCaveScenery(group:THREE.Group,w:number,l:number,h:number,type
   x-=wave(y,z)*weight;
   return new THREE.Vector3(side*x,y,z);
  };
+ // Unfold the same ground UVs along each rounded side. Both UV axes now
+ // continue at floor/wall and wall/vault seams, including on ramped floors.
+ const wallUV=new Map<string,number[]>();
+ const wallU=(side:number,row:number,z:number)=>{
+  const key=`${side}:${z}`;
+  let values=wallUV.get(key);
+  if(!values){
+   values=[side*(half-lower)/2.4];let distance=0,previous=wallPoint(side,0,z);
+   for(let r=1;r<=rows;r++){const next=wallPoint(side,r/rows,z);distance+=next.distanceTo(previous);previous=next;values.push(side*(half-lower+distance)/2.4);}
+   wallUV.set(key,values);
+  }
+  return values[row];
+ };
  function mesh(name:string,points:number[],indices:number[],uvs:number[],colors:number[]){
   const g=uvGeometry(points,indices);g.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));g.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));g.computeBoundingBox();g.computeBoundingSphere();
   const m=new THREE.Mesh(g,material);m.name=name;m.castShadow=true;m.receiveShadow=true;root.add(m);return m;
@@ -44,7 +57,7 @@ export function addCaveScenery(group:THREE.Group,w:number,l:number,h:number,type
  for(const side of [-1,1]){
   const p:number[]=[],idx:number[]=[],uv:number[]=[],col:number[]=[];
   for(let row=0;row<=rows;row++)for(let z=0;z<=cols;z++){
-   const zz=-l/2+z*l/cols,v=wallPoint(side,row/rows,zz);p.push(v.x,v.y,v.z);uv.push(zz/2.4,row/rows*h/2.4);
+   const zz=-l/2+z*l/cols,v=wallPoint(side,row/rows,zz);p.push(v.x,v.y,v.z);uv.push(wallU(side,row,zz),zz/2.4);
    const shade=.64+wave(v.y,zz)*.4;col.push(shade,shade,shade*.98);
   }
   for(let y=0;y<rows;y++)for(let z=0;z<cols;z++){const a=y*(cols+1)+z,b=a+1,c=a+cols+1,d=c+1;if(side<0)idx.push(a,c,b,b,c,d);else idx.push(a,b,c,b,d,c);}
@@ -56,7 +69,7 @@ export function addCaveScenery(group:THREE.Group,w:number,l:number,h:number,type
  for(let x=0;x<=across;x++)for(let z=0;z<=cols;z++){
   const t=x/across,xx=THREE.MathUtils.lerp(-crownX,crownX,t),zz=-l/2+z*l/cols;
   const arch=Math.sin(t*Math.PI),relief=arch*(.28+wave(xx,zz)*1.7);
-  p.push(xx,h+Math.min(0,roomFloor(type,l,zz))-relief,zz);uv.push(xx/2.4,zz/2.4);
+  p.push(xx,h+Math.min(0,roomFloor(type,l,zz))-relief,zz);uv.push(THREE.MathUtils.lerp(wallU(-1,rows,zz),wallU(1,rows,zz),t),zz/2.4);
   const shade=.69-relief*.12;col.push(shade,shade,shade*.98);
  }
  for(let x=0;x<across;x++)for(let z=0;z<cols;z++){const a=x*(cols+1)+z,b=a+1,c=a+cols+1,d=c+1;idx.push(a,c,b,b,c,d);}
@@ -68,7 +81,7 @@ export function addCaveScenery(group:THREE.Group,w:number,l:number,h:number,type
   for(let y=0;y<=ny;y++)for(let x=0;x<=nx;x++){
    const xx=-w/2+x*w/nx,yy=y*h/ny,edge=THREE.MathUtils.smoothstep(Math.abs(xx),w*.25,w*.5);
    const inset=(.26+wave(xx+yy,side*l/2)*.8)*(1-edge);
-   p.push(xx,yy,side*(l/2-.24-inset));uv.push(xx/2.4,yy/2.4);const shade=.68+wave(xx,yy)*.3;col.push(shade,shade,shade*.98);
+   p.push(xx,yy,side*(l/2-.24-inset));uv.push(xx/2.4,(side*l/2-side*yy)/2.4);const shade=.68+wave(xx,yy)*.3;col.push(shade,shade,shade*.98);
   }
   for(let y=0;y<ny;y++)for(let x=0;x<nx;x++){
    const x0=-w/2+x*w/nx,x1=x0+w/nx,y0=y*h/ny;
@@ -90,7 +103,8 @@ export function addCaveScenery(group:THREE.Group,w:number,l:number,h:number,type
    const q=new THREE.Quaternion().setFromEuler(new THREE.Euler(rand()*.3,rand()*.3,(rand()-.5)*.5));
    matrix.compose(new THREE.Vector3(side*(half+.13),y,z+(rand()-.5)*.5),q,new THREE.Vector3(.42,.45+rand()*.3,.7+rand()*.35));normal.getNormalMatrix(matrix);
    const shade=.6+rand()*.18;count++;
-   for(let i=0;i<sp.count;i++){v.fromBufferAttribute(sp,i).applyMatrix4(matrix);n.fromBufferAttribute(sn,i).applyNormalMatrix(normal);points.push(v.x,v.y,v.z);normals.push(n.x,n.y,n.z);uvs.push(v.z/2.4,v.y/2.4);colors.push(shade,shade,shade*.98);}
+   for(let i=0;i<sp.count;i++){v.fromBufferAttribute(sp,i).applyMatrix4(matrix);n.fromBufferAttribute(sn,i).applyNormalMatrix(normal);points.push(v.x,v.y,v.z);normals.push(n.x,n.y,n.z);const wallRow=Math.round(THREE.MathUtils.clamp((v.y-roomFloor(type,l,v.z)-lower)/(h+Math.min(0,roomFloor(type,l,v.z))-upper-roomFloor(type,l,v.z)-lower),0,1)*(.72-.25)*rows+.25*rows);
+    uvs.push(wallU(side,wallRow,v.z),v.z/2.4);colors.push(shade,shade,shade*.98);}
   }
   source.dispose();const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(points,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));g.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));g.computeBoundingSphere();
   const m=new THREE.Mesh(g,material);m.name='layered-wall-fragments';m.userData.rockCount=count;m.castShadow=true;m.receiveShadow=true;root.add(m);
