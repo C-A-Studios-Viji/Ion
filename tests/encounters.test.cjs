@@ -621,6 +621,8 @@ test('cave floor uses ordinary baked meshes and stock materials independently of
  let vertices=0;
  floor.children.forEach(mesh=>{assert(mesh instanceof THREE.Mesh);assert(!(mesh instanceof THREE.InstancedMesh));assert(mesh.material instanceof THREE.MeshStandardMaterial);assert.equal(mesh.material.onBeforeCompile,THREE.Material.prototype.onBeforeCompile);assert(mesh.material.vertexColors);assert(mesh.material.emissiveIntensity>0);for(const name of ['position','normal','color']){const a=mesh.geometry.attributes[name];assert(a);for(const value of a.array)assert(Number.isFinite(value));}vertices+=mesh.geometry.attributes.position.count;});
  assert(vertices<100000);
+ const widest=h.load(path.join(root,'app/caveFloor.ts')).addRockyCaveFloor(new THREE.Group(),32,48,'grand',4,[]);
+ let maximum=0;widest.traverse(m=>{if(m.isMesh)maximum+=m.geometry.attributes.position.count;});assert(maximum<100000,'largest layout exceeds the portable floor budget');
  h.act.toggleGraphics();assert.equal(h.runtime.roomGroup.getObjectByName('cave-floor-decoration'),floor);h.step();assert(floor.visible);
  const {addRockyCaveFloor}=h.load(path.join(root,'app/caveFloor.ts'));
  for(const type of ['duplex','multifloor','basement']){const g=new THREE.Group(),detail=addRockyCaveFloor(g,18,30,type,7,[]);assert(detail.userData.layoutGeometry);assert(detail.getObjectByName('cave-rock-slabs'));}
