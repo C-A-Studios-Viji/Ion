@@ -89,8 +89,8 @@ test('actual chase rooms contain reachable specimens and four resonators; keys c
   const h=gameHarness();await Promise.resolve();await Promise.resolve();
   for(const room of [25,26,28,50,75,179]){
     h.enter(room);const r=h.runtime;r.enemies.forEach(e=>{if(e.kind!=='noise')e.alive=false;});
-    assert.equal(r.chaseRoom,true);assert.equal(r.requiredResonators,4);assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,3);
-    assert(r.pickups.filter(p=>p.kind==='specimen').every(p=>p.object.userData.sealedCapsule));
+    assert.equal(r.chaseRoom,true);assert.equal(r.requiredResonators,4);assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,5);
+    assert(r.pickups.filter(p=>p.kind==='specimen').every(p=>!p.object.userData.sealedCapsule));assert(!r.stations.some(s=>s.kind==='noiseCore'));
     const stations=r.stations.filter(s=>s.kind==='resonator');assert.equal(stations.length,4);
     assert(stations.every(s=>s.object.userData.sealedResonator));
     for(const p of [...stations,...r.pickups.filter(p=>p.kind==='specimen'||p.mandatory)]){
@@ -100,9 +100,7 @@ test('actual chase rooms contain reachable specimens and four resonators; keys c
     r.nearest={kind:'door'};h.act.interact();assert.equal(r.doorUnlocked,false);assert.equal(r.accessKeys,10);
     for(const p of [...r.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);
     h.useAt(r.stations.find(s=>s.kind==='cabinet').object);
-    assert.equal(r.noiseCount,4);
-    const quartz=r.pickups.find(p=>p.kind==='crystal'&&p.crystal==='quartz');assert(quartz);h.useAt(quartz.object);
-    h.useAt(r.stations.find(s=>s.kind==='noiseCore').object);
+    assert.equal(r.noiseCount,5);
     assert.equal(r.noiseCount,5);assert.equal(r.noiseActive,false);assert.equal(r.doorUnlocked,false);
     for(const s of stations)h.useAt(s.object);
     for(const p of [...r.pickups.filter(p=>p.mandatory)])h.useAt(p.object);
@@ -117,8 +115,7 @@ test('Noise expiration is fatal even in a trapdoor; collection stops the deadlin
   h.enter(25);r.enemies.forEach(e=>e.alive=false);
   for(const p of [...r.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);
   h.useAt(r.stations.find(s=>s.kind==='cabinet').object);
-  h.useAt(r.pickups.find(p=>p.kind==='crystal'&&p.crystal==='quartz').object);
-  h.useAt(r.stations.find(s=>s.kind==='noiseCore').object);
+
   r.noiseTime=.01;h.step(.5);assert.equal(r.dead,false);
 });
 
@@ -439,8 +436,8 @@ test('terraced floors support walking and INVERSION strikes respect cover',async
   for(let i=0;i<240;i++){h.step(.05);high=Math.max(high,r.player.y);low=Math.min(low,r.player.y);assert(Math.abs(r.player.y-1.65-types.roomFloor(type,r.roomLength,r.player.z))<.65);}
   r.keysDown.clear();assert(high-low>1.5);
  }
- h.enter(17);h.runtime.player.set(0,1.65,15);h.runtime.spawnGrace=0;h.runtime.inversionTime=7.95;h.step(.1);assert.equal(h.runtime.dead,true);
- h.enter(17);h.runtime.player.set(3,1.65,11);h.runtime.spawnGrace=0;h.runtime.inversionTime=7.95;h.step(.1);assert.equal(h.runtime.dead,false);
+ h.enter(17);h.runtime.player.set(0,1.65,15);h.runtime.spawnGrace=0;h.runtime.inversionTime=13.95;h.runtime.inversionMercyUsed=true;h.step(.1);assert.equal(h.runtime.dead,true);
+ h.enter(17);h.runtime.player.set(3,1.65,11);h.runtime.spawnGrace=0;h.runtime.inversionTime=13.95;h.step(.1);assert.equal(h.runtime.dead,false);
 });
 
 test('room geometry has a traversable route to the exit and each required objective',()=>{
@@ -750,4 +747,61 @@ test('every side formation and scattered point mines, awards its mineral and sta
  }
  const scatter=r.roomGroup.getObjectByName('scattered-clear-crystals'),m=new THREE.Matrix4();
  for(let i=0;i<scatter.count;i++){scatter.getMatrixAt(i,m);assert.equal(m.elements[0],0);assert.equal(m.elements[5],0);assert.equal(m.elements[10],0);}
+});
+
+test('open Noise capsules need no sacrifice and the last ten seconds reveal only remaining capsules',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.enter(25);const r=h.runtime;r.enemies.forEach(e=>e.alive=false);
+ const capsules=r.pickups.filter(p=>p.kind==='specimen');assert.equal(capsules.length,5);assert(capsules.every(p=>!p.object.userData.sealedCapsule));assert(!r.stations.some(s=>s.kind==='noiseCore'));
+ for(const p of capsules){assert(Math.abs(p.object.position.x)<=1.5);assert(p.object.children.some(c=>c.isMesh));}
+ r.noiseTime=10.2;h.step(.05);assert(!r.roomGroup.getObjectByName('noise-emergency-xray'));
+ r.noiseTime=10;h.step(.05);const assist=r.roomGroup.getObjectByName('noise-emergency-xray');assert(assist.visible);assert.equal(assist.children.length,5);
+ assist.traverse(m=>{if(m.isMesh){assert.equal(m.material.depthTest,false);assert.equal(m.material.depthWrite,false);assert.equal(m.material.color.getHex(),0xff193c);assert(m.renderOrder>=10000);}});
+ for(const key of Object.keys(r.crystals))r.crystals[key]=0;
+ const cabinet=r.stations.find(s=>s.kind==='cabinet');h.useAt(cabinet.object);assert.equal(r.noiseCount,0);
+ h.useAt(capsules[0].object);h.step(.05);assert.equal(assist.children.length,4);
+ for(const p of capsules.slice(1))h.useAt(p.object);
+ assert.equal(r.noiseCount,5);assert.equal(r.noiseActive,false);assert.equal(assist.visible,false);assert.equal(assist.children.length,0);assert(Object.values(r.crystals).every(n=>n===0));
+});
+
+test('INVERSION gives one saved mercy, single-hit anchors and three seconds before a slower pursuit',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(17);const r=h.runtime;
+ r.player.set(0,1.65,15);r.spawnGrace=0;r.inversionTime=8.95;h.step(.1);assert(r.inversionLight.intensity>=60);assert.equal(r.dead,false);
+ r.inversionTime=13.95;h.step(.1);assert.equal(r.dead,false);assert.equal(r.inversionMercyUsed,true);
+ h.act.saveRun();h.act.loadSlot(0);h.act.confirmBoons();assert.equal(r.inversionMercyUsed,true);
+ const anchors=r.stations.filter(s=>s.kind==='resonator');for(const s of anchors){r.mineSwing=0;r.nearest={kind:'station',index:r.stations.indexOf(s)};h.act.interact();assert(s.activated);}
+ assert.equal(r.activeResonators,3);h.step(.05);const position=r.inversionActor.position.clone();h.step(2);assert(r.inversionActor.position.distanceTo(position)<.001);assert.equal(r.dead,false);
+ h.step(3);assert(r.inversionActor.position.y<position.y);assert.equal(r.doorUnlocked,true);
+});
+
+test('flooded rooms use animated ripple water, readable grating and cosmetic debris without adding collisions',()=>{
+ const h=gameHarness(),{buildRoomGeometry}=h.load(path.join(root,'app/roomGeometry.ts')),{animateFloodedScenery}=h.load(path.join(root,'app/floodedScenery.ts'));
+ const group=new THREE.Group(),obstacles=buildRoomGeometry(group,'flooded',24,44,9);assert.equal(obstacles.length,0);
+ const basin=group.getObjectByName('flooded-cistern'),water=basin.getObjectByName('rippled-floodwater'),deck=basin.getObjectByName('wet-metal-grating');assert(water.material.isMeshPhysicalMaterial);assert(water.material.normalMap.isDataTexture);assert(water.material.clearcoat>0);assert(deck.geometry.attributes.position.count<40000);
+ animateFloodedScenery(group,3);const p=water.geometry.attributes.position;let low=1,high=-1;for(let i=0;i<p.count;i++){assert(Number.isFinite(p.getY(i)));low=Math.min(low,p.getY(i));high=Math.max(high,p.getY(i));}assert(high-low>.02);assert(high<.04&&low>-.04);
+ assert.equal(water.material.onBeforeCompile,THREE.Material.prototype.onBeforeCompile);assert(basin.children.some(c=>c.userData.floatPhase!==undefined));
+});
+
+test('safe practice teaches the real tasks, protects saves and restores the paused descent',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(42);const r=h.runtime;r.crystals.citrine=8;r.inventory.sang=3;h.act.saveRun();h.act.pause();
+ const slots=h.saved.get('ion-saves-v1'),checkpoint=h.saved.get('ion-checkpoint'),badges=h.saved.get('ion-badges-v1');
+ h.act.openGuide();assert.equal(h.screen(),'tutorial');h.act.closeGuide();assert.equal(h.screen(),'pause');
+ h.act.openGuide();h.act.startTraining();assert.equal(r.room,1);assert.equal(r.running,true);assert.equal(h.screen(),null);h.act.saveRun();assert.equal(h.saved.get('ion-saves-v1'),slots);
+ r.player.z-=4;r.yaw+=.4;h.step(.1);h.act.toggleLight();h.act.toggleLight();h.step(.1);
+ const quartz=r.pickups.find(p=>p.object.userData.practiceTarget);assert(quartz);h.useAt(quartz.object);h.step(.3);
+ const resonator=r.stations.find(s=>s.kind==='resonator');h.useAt(resonator.object);h.step(.3);
+ const hatch=r.stations.find(s=>s.kind==='trapdoor');h.useAt(hatch.object);assert.equal(r.hiding,true);h.step(.1);h.act.interact();assert.equal(r.hiding,false);h.step(.1);
+ assert.equal(r.noiseActive,true);assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,5);
+ r.noiseTime=.01;h.step(.1);assert.equal(r.dead,false);assert(r.noiseTime>9);assert(r.roomGroup.getObjectByName('noise-emergency-xray').visible);
+ for(const p of [...r.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);h.step(.1);assert(r.doorUnlocked);
+ r.transition=.01;h.step(.1);assert.equal(h.screen(),'trainingComplete');
+ h.act.finishTraining();assert.equal(r.room,42);assert.equal(r.crystals.citrine,8);assert.equal(r.inventory.sang,3);assert.equal(h.screen(),'pause');assert.equal(r.running,false);
+ assert.equal(h.saved.get('ion-saves-v1'),slots);assert.equal(h.saved.get('ion-checkpoint'),checkpoint);assert.equal(h.saved.get('ion-badges-v1'),badges);
+});
+
+
+test('legacy cabinet capsule progress resumes with only the outstanding open capsules',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(25);h.act.saveRun();
+ const slots=JSON.parse(h.saved.get('ion-saves-v1'));slots[0].state.noiseCount=1;slots[0].state.noiseActive=true;slots[0].state.removedPickups=[];h.saved.set('ion-saves-v1',JSON.stringify(slots));
+ h.act.loadSlot(0);h.act.confirmBoons();assert.equal(h.runtime.pickups.filter(p=>p.kind==='specimen').length,4);
+ h.runtime.enemies.forEach(e=>e.alive=false);for(const p of [...h.runtime.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);assert.equal(h.runtime.noiseCount,5);assert.equal(h.runtime.noiseActive,false);
 });
