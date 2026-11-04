@@ -21,6 +21,9 @@ import { BOONS, negativeBoons, candyOutcome, boonDoorStep, type BoonId } from ".
 import { emptyLoreRoute, LORE_NIGHTMARES, serpAdvice, type LoreRoute } from "./loreRoute";
 import { emptyEntityEvents, createMemoryTrial, payVoid, type EntityEvents } from "./entityEvents";
 import { roomTypeFor, roomFloor, mazeBarriers, ROOM_LABELS, type RoomType } from './roomTypes';
+import {TUTORIAL_STEPS,PRACTICE_STEPS} from './fieldGuide';
+import {updateNoiseAssist} from './noiseAssist';
+import {animateFloodedScenery} from './floodedScenery';
 import { buildRoomGeometry } from './roomGeometry';
 import { permissionDay, verifyPermission } from "./badgePermission";
 
@@ -43,6 +46,7 @@ type Screen =
   | "customize"
   | "start"
   | "tutorial"
+  | "trainingComplete"
   | "pause"
   | "dead"
   | "win"
@@ -170,6 +174,7 @@ type Runtime = {
   appearance:Appearance;
   layout: RoomType;
   inversionTime: number;
+  inversionMercyUsed:boolean;
   inversionActor: THREE.Group | null;
   inversionLight: THREE.PointLight | null;
   platforms: THREE.Box3[];
@@ -304,6 +309,7 @@ type SaveData = {
   pickaxeLevel?:number;
   miningProgress?:Record<string,number>;
   inversionTime?: number;
+  inversionMercyUsed?:boolean;
   loreRoute?:LoreRoute;
   encounters?: EntityEvents;
   boons?: BoonId[];
@@ -358,7 +364,12 @@ type SaveData = {
 
 type ActionApi = {
   start: (fresh?: boolean) => void;
+  openGuide:()=>void;
+  closeGuide:()=>void;
+  startTraining:()=>void;
+  finishTraining:()=>void;
   resume: () => void;
+  pause:()=>void;
   interact: () => void;
   fire: () => void;
   toggleLight: () => void;
@@ -537,83 +548,6 @@ const ROOM_NAMES = [
   "Sublevel Transit",
   "Crystal Nursery",
   "Resonance Gallery",
-];
-
-const TUTORIAL_STEPS = [
-  {
-    number: "01",
-    label: "MOVE & SEARCH",
-    title: "Every room has a way through.",
-    body: "Move carefully, search the physical environment and approach glowing items or machinery. The prompt at the centre tells you when something can be used.",
-    desktop: "WASD MOVE · SHIFT SPRINT · MOUSE LOOK · E INTERACT",
-    touch: "LEFT PAD MOVE · RIGHT PAD LOOK · USE TO INTERACT",
-  },
-  {
-    number: "02",
-    label: "LIGHT & SUPPLIES",
-    title: "Your flashlight is powerful—not permanent.",
-    body: "The wider flashlight illuminates caves and reveals danger, but its battery drains while active. Collect cells, ammunition and crystals before pushing deeper.",
-    desktop: "F TOGGLE FLASHLIGHT · WATCH BATTERY AND AMMO",
-    touch: "LIGHT TOGGLE · WATCH BATTERY AND AMMO",
-  },
-  {
-    number: "03",
-    label: "THE GRIN & TRAPDOORS",
-    title: "Red flashes mean you have ten seconds.",
-    body: "Each eligible room has a fresh 7% chance of a Grin encounter. The screen flashes red for ten seconds before it arrives, then the Grin leaves after fifteen seconds. Find the floor trapdoor in every room and press interact to hide. The sealed hatch grants contact immunity until you climb out. Trapdoors jam during Blob chases.",
-    desktop: "RED FLASH · FIND HATCH · E TO HIDE OR EXIT",
-    touch: "RED FLASH · FIND HATCH · USE TO HIDE OR EXIT",
-  },
-  {
-    number: "04",
-    label: "HAID-INI",
-    title: "The orange stripes follow you underground.",
-    body: "Haid-Ini is slow, but it can enter every trapdoor and cannot be harmed by gunfire. When it appears, tune all 30 resonators around the room to overload and banish it.",
-    desktop: "KEEP MOVING · E TUNE ×30 · DO NOT HIDE",
-    touch: "KEEP MOVING · USE TO TUNE ×30 · DO NOT HIDE",
-  },
-  {
-    number: "05",
-    label: "CRYSTAL WHIRLPOOLS",
-    title: "The whirlpools are escape routes.",
-    body: "Enter the bright centre of a stable crystal whirlpool to be thrown forward through the room. In chase halls, they launch you over difficult parkour sections.",
-    desktop: "RUN INTO THE CORE · STEER WHILE AIRBORNE",
-    touch: "RUN INTO THE CORE · STEER WHILE AIRBORNE",
-  },
-  {
-    number: "06",
-    label: "BLOB CHASES",
-    title: "Five rooms. No safe stops.",
-    body: "Rooms 25–29, 50–54 and every later 25-room interval become five-room Blob pursuits. In EACH room, collect Noise’s five cyan specimens and tune four resonators. Resonators briefly stagger the Blob. Jump barriers, sprint and use whirlpools. Later stages get harder.",
-    desktop: "SPACE JUMP · SHIFT RUN · E COLLECT / TUNE ×4",
-    touch: "JUMP · HOLD RUN · USE TO COLLECT / TUNE ×4",
-  },
-  {
-    number: "07", label: "NOISE", title: "The waves are a countdown.",
-    body: "When the screen begins to ripple, recover five glowing cyan specimen capsules before the Noise countdown reaches zero. Hiding cannot stop the pressure rupture. Every chase room contains Noise; the specimen counter resets on entering the next room.",
-    desktop: "E COLLECT ×5 · WATCH THE NOISE TIMER", touch: "USE TO COLLECT ×5 · WATCH THE NOISE TIMER",
-  },
-  {
-    number: "08", label: "REMETONS", title: "Pers can be infected.",
-    body: "Eligible normal rooms have a 2% Remetons chance. Watch Pers turn black and transform into a crowned Blob. When the scene ends, sprint through five pursuit rooms, completing four resonators and five Noise specimens in each. The game pauses the threat timers during the transformation.",
-    desktop: "WATCH THE TRANSFORMATION · PREPARE TO RUN", touch: "WATCH THE TRANSFORMATION · PREPARE TO RUN",
-  },
-  {
-    number: "09",
-    label: "FLUORITE & PERS HUB",
-    title: "The main currency cannot be found.",
-    body: "At an Infusionsmith, combine one Malachite, Amethyst, Quartz and Corrupted crystal to synthesize TWO Fluorite. After the first chase, Room 32 contains Pers Hub: trade Fluorite for random inventory items or spend ten on a Basdino companion.",
-    desktop: "SYNTHESIZE FLUORITE · VISIT PERS AT ROOM 32",
-    touch: "SYNTHESIZE FLUORITE · VISIT PERS AT ROOM 32",
-  },
-  {
-    number: "10",
-    label: "INVENTORY & BASDINOS",
-    title: "Carry miracles. Never trust them.",
-    body: "Open the new inventory to use Pers items. A Soul of Sadist lets you choose an entity to banish. Basdinos follow you and sacrifice themselves to absorb one otherwise-fatal contact.",
-    desktop: "CLICK INVENTORY · CHOOSE ITEMS · REACH ROOM 200",
-    touch: "TAP INVENTORY · CHOOSE ITEMS · REACH ROOM 200",
-  },
 ];
 
 const INITIAL_HUD: HudState = {
@@ -808,6 +742,7 @@ export default function IonGame() {
   const [touchCapable, setTouchCapable] = useState(false);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
+  const [practiceStep,setPracticeStep]=useState<number|null>(null);
   const [assetProgress, setAssetProgress] = useState(0);
   const [savedRuns, setSavedRuns] = useState<(RunSlot<SaveData> | null)[]>([null,null,null]);
   const [badgeProgress, setBadgeProgress] = useState<BadgeProgress>(emptyBadgeProgress());
@@ -901,7 +836,7 @@ export default function IonGame() {
     const runtime: Runtime = {
       chaseState: null, noiseActive: false, noiseCount: 0, noiseTime: 0, noisePulseTimer: 0,
       infectionTime: -1, infectionActors: null, deathKind: "entity", scareActor: null, scareTime: 0,
-      layout: "standard", inversionTime: 0, inversionActor: null, inversionLight: null,
+      layout: "standard", inversionTime: 0, inversionMercyUsed:false, inversionActor: null, inversionLight: null,
       pickaxeLevel:0,mineSwing:0,thirdPerson:false,localAvatar,pickaxeModel,appearance, renderer, scene, camera, roomGroup, roomWidth: 17, roomLength: 25, roomHeight: 6,
       room: 1, roomName: "Intake Corridor", tier: 0, player: new THREE.Vector3(0, 1.65, 8),
       verticalVelocity: 0, grounded: true,
@@ -928,6 +863,8 @@ export default function IonGame() {
       removedPickups: new Set(), remoteAvatar: null, remotePose: null, networkTimer: 0, exiting: false,
     };
     runtimeRef.current = runtime;
+    let guideReturn:Screen='start';
+    let training:{step:number;save:SaveData;checkpoint:SaveData|null;screen:Screen;origin:THREE.Vector3;yaw:number;lightToggles:number;hidden:boolean;elapsed:number;marker:THREE.Mesh|null}|null=null;
     const party = new PartyLink();partyRef.current=party;
 
     function localPose():Pose{return{x:runtime.player.x,y:runtime.player.y,z:runtime.player.z,yaw:runtime.yaw,light:runtime.flashlightOn,dead:runtime.dead,room:runtime.room,name:party.playerName,appearance:runtime.appearance};}
@@ -1065,7 +1002,7 @@ export default function IonGame() {
     }
 
     function badge(event: BadgeEvent, detail?: string, value = 1) {
-      if(permissionRef.current!==permissionDay())return;
+      if(training||permissionRef.current!==permissionDay())return;
       const won=awardBadges(badgesRef.current,event,detail,value);
       if(won.length){
         setBadgeProgress({...badgesRef.current,unlocked:[...badgesRef.current.unlocked]});
@@ -1504,17 +1441,14 @@ export default function IonGame() {
 
     function addNoiseEncounter() {
       if (!runtime.noiseActive) return;
-      // Three capsules are sealed inside crystal geodes; a fourth is in the
-      // room's cabinet, and the fifth is held by Noise itself.
-      for(let i=0;i<3;i++) {
-        const z=runtime.roomLength/2-6-(i+.5)*(runtime.roomLength-14)/5;
-        const shell=makePickup("specimen",new THREE.Vector3((i%2?1:-1)*.7,.85,z));
-        shell.clear();shell.add(createCrystal(i===0?"quartz":i===1?"obsidian":"citrine",.8));
-        shell.userData.sealedCapsule=true;
+      // Five open capsules sit beside the main route, never inside objects.
+      for(let i=0;i<5;i++) {
+        const z=runtime.roomLength/2-5-i*(runtime.roomLength-10)/4;
+        makePickup("specimen",new THREE.Vector3((i%2?1:-1)*1.15,.85,z));
       }
       const object=createEntityModel("noise");object.position.set(0,.1,-runtime.roomLength/2+4);runtime.roomGroup.add(object);
       runtime.enemies.push({object,kind:"noise",speed:0,alive:true,teleportTimer:99,phase:0,wanderTarget:new THREE.Vector3(),wanderTimer:99});
-      runtime.stations.push({kind:"noiseCore",object,activated:false});
+
       badge("encounter","noise");
     }
 
@@ -1598,27 +1532,32 @@ export default function IonGame() {
         runtime.inversionActor=createPersModel();runtime.inversionActor.rotation.z=Math.PI;runtime.inversionActor.position.set(0,runtime.roomHeight-1,0);runtime.roomGroup.add(runtime.inversionActor);
         runtime.inversionLight=new THREE.PointLight(0xb54aff,0,30);runtime.inversionLight.position.set(0,4,0);runtime.roomGroup.add(runtime.inversionLight);
         if(runtime.doorPers)runtime.doorPers.visible=false;
-        notify('INVERSION · S MOVES FORWARD · BREAK THREE ANCHORS · TAKE COVER AT PURPLE LIGHT');
+        notify('INVERSION · S FORWARD · SINGLE-HIT ANCHORS · FIVE-SECOND PURPLE WARNING · ONE MERCY');
       }
     }
     function updateInversion(dt:number){
       const actor=runtime.inversionActor;if(!actor)return;
-      const before=Math.floor(runtime.inversionTime/8);runtime.inversionTime+=dt;
-      const cycle=runtime.inversionTime%8;
+      const before=Math.floor(runtime.inversionTime/14);runtime.inversionTime+=dt;
+      const cycle=runtime.inversionTime%14;
       const released=runtime.activeResonators>=3;
-      if(runtime.inversionLight)runtime.inversionLight.intensity=!released&&cycle>=6?65:2;
+      if(runtime.inversionLight)runtime.inversionLight.intensity=!released&&cycle>=9?65:2;
       if(!released){
         actor.position.set(Math.sin(runtime.inversionTime*.3)*2,runtime.roomHeight-1,0);
-        if(cycle>=6&&cycle-dt<6)notify('PERS · PURPLE STRIKE · GET BEHIND A CABINET');
-        if(Math.floor(runtime.inversionTime/8)>before&&!runtime.hiding){
+        if(cycle>=9&&cycle-dt<9)notify('PERS · PURPLE STRIKE · GET BEHIND A CABINET');
+        if(Math.floor(runtime.inversionTime/14)>before&&!runtime.hiding){
           const source=new THREE.Vector3(actor.position.x,1.2,actor.position.z),target=runtime.player.clone();target.y=1.2;
           const ray=new THREE.Ray(source,target.clone().sub(source).normalize());
           const covered=runtime.obstacles.some(box=>{const hit=ray.intersectBox(box,new THREE.Vector3());return hit&&hit.distanceTo(source)<target.distanceTo(source);});
-          if(!covered)kill('INVERTED PERS · TAKE COVER WHEN THE LIGHT TURNS PURPLE','remetons');
+          if(!covered){
+            if(!runtime.inversionMercyUsed){runtime.inversionMercyUsed=true;runtime.spawnGrace=5;notify('PERS SPARED YOU ONCE · GET BEHIND A CABINET AT PURPLE LIGHT');}
+            else kill('INVERTED PERS · TAKE COVER WHEN THE LIGHT TURNS PURPLE','remetons');
+          }
         }
       }else{
+        if(actor.userData.releaseAt===undefined){actor.userData.releaseAt=runtime.inversionTime+3;notify('THREE ANCHORS BROKEN · THREE-SECOND HEAD START · RUN TO THE EXIT');}
+        if(runtime.inversionTime<actor.userData.releaseAt)return;
         actor.rotation.z=0;actor.position.y=Math.max(0,actor.position.y-dt*6);
-        if(actor.position.y===0){const direction=runtime.player.clone().sub(actor.position);direction.y=0;actor.position.addScaledVector(direction.normalize(),currentSprintSpeed()*.8*dt);actor.lookAt(runtime.player.x,0,runtime.player.z);if(actor.position.distanceTo(runtime.player)<2)kill('INVERTED PERS CAUGHT YOU AT THE EXIT','remetons');}
+        if(actor.position.y===0){const direction=runtime.player.clone().sub(actor.position);direction.y=0;actor.position.addScaledVector(direction.normalize(),currentSprintSpeed()*.55*dt);actor.lookAt(runtime.player.x,0,runtime.player.z);if(actor.position.distanceTo(runtime.player)<2)kill('INVERTED PERS CAUGHT YOU AT THE EXIT','remetons');}
       }
     }
     function buildRoom(room: number, restore?: SaveData) {
@@ -1670,7 +1609,7 @@ export default function IonGame() {
       if(runtime.resonatorWorld){runtime.roomWidth=18;runtime.roomLength=140;runtime.roomName="RESONATOR · DOOR 300 · CONVERGENCE";}
       runtime.roomHeight = runtime.chaseRoom ? 8.2 : Math.max(4.7, 7 - runtime.tier * 0.24 + rand());
       runtime.layout=roomTypeFor(room,runtime.chaseRoom||runtime.haidIniActive||runtime.persHubActive||runtime.resonatorWorld||runtime.paradoxWorld||runtime.ascendedWorld||runtime.loreRoute.phase==='redox'||runtime.loreRoute.phase==='reveal');
-      runtime.inversionTime=restore?.inversionTime??0;
+      runtime.inversionTime=restore?.inversionTime??0;runtime.inversionMercyUsed=restore?.inversionMercyUsed??false;
       if(runtime.layout!=="standard"){
         runtime.roomName+=` · ${ROOM_LABELS[runtime.layout]}`;
         runtime.roomWidth=runtime.layout==='grand'?32:24;runtime.roomLength=runtime.layout==='grand'?48:runtime.layout==='maze'?52:44;
@@ -1806,9 +1745,7 @@ export default function IonGame() {
         makePickup("crystal",new THREE.Vector3(-2.35,.35,-runtime.roomLength/2+5.5),"citrine");
         makePickup("crystal",new THREE.Vector3(2.35,.35,-runtime.roomLength/2+5.5),"obsidian");
       }
-      if(runtime.noiseActive && !runtime.crystals.quartz && !runtime.crystals.obsidian && !runtime.crystals.citrine){
-        makePickup("crystal",new THREE.Vector3(2.4,.35,runtime.roomLength/2-4.6),"quartz");
-      }
+
       if (room >= 4 && room !== 200 && (rand() < 0.62 + runtime.tier * 0.045 || room % 5 === 0)) {
         const whirlpoolCount = Math.min(3, 1 + Math.floor(runtime.tier / 3));
         for (let i = 0; i < whirlpoolCount; i += 1) {
@@ -1906,6 +1843,13 @@ export default function IonGame() {
         const noiseCore=runtime.stations.find(s=>s.kind==="noiseCore");
         if(noiseCore)noiseCore.activated=restore.noiseCoreOpened??false;
         runtime.noiseCount=restore.noiseCount ?? 0;runtime.noiseTime=restore.noiseTime ?? runtime.noiseTime;
+        // Old saves could include cabinet or offering capsules. Keep exactly
+        // the outstanding count after moving all five capsules into the open.
+        let capsulesLeft=Math.max(0,5-runtime.noiseCount);
+        runtime.pickups=runtime.pickups.filter(p=>{
+          if(p.kind!=='specimen'||capsulesLeft-->0)return true;
+          runtime.removedPickups.add(p.object.userData.pickupId);runtime.roomGroup.remove(p.object);disposeModel(p.object);return false;
+        });
         runtime.mandatoryCollected=restore.mandatoryCollected ?? runtime.mandatoryCollected;
         if(restore.playerPosition?.length===3)runtime.player.set(...restore.playerPosition);
         refreshObjective();
@@ -2023,7 +1967,7 @@ export default function IonGame() {
       updateHud(true);
     }
     function snapshot(): SaveData {
-      return { pickaxeLevel:runtime.pickaxeLevel,miningProgress:Object.fromEntries([...runtime.pickups.map(p=>[`p${p.object.userData.pickupId}`,p.object.userData.mineHits??0]),...runtime.stations.map((v,i)=>[`s${i}`,v.object.userData.mineHits??0])]), inversionTime: runtime.inversionTime, chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
+      return { pickaxeLevel:runtime.pickaxeLevel,miningProgress:Object.fromEntries([...runtime.pickups.map(p=>[`p${p.object.userData.pickupId}`,p.object.userData.mineHits??0]),...runtime.stations.map((v,i)=>[`s${i}`,v.object.userData.mineHits??0])]), inversionTime: runtime.inversionTime, inversionMercyUsed:runtime.inversionMercyUsed, chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
         discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion, lightInfusion: runtime.lightInfusion,
         loreRoute:{...runtime.loreRoute},encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,boonieMet:runtime.boonieMet,accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
         wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil },
@@ -2078,17 +2022,18 @@ export default function IonGame() {
       runtime.ascendedWorld=false;runtime.ascendedDoor=0;runtime.ascendedOriginRoom=1;runtime.ascendedFromParadox=false;runtime.goldBarPresent=false;
       runtime.ascendedCleared=false;runtime.winQuestArmed=false;runtime.winQuestBlob=false;runtime.winBadgeSpawned=false;
       runtime.checkpoint = null;
-      try { localStorage.removeItem("ion-checkpoint"); } catch { /* best effort */ }
+      if(!training)try { localStorage.removeItem("ion-checkpoint"); } catch { /* best effort */ }
       runtime.dead = false; runtime.won = false; buildRoom(1);
     }
     function saveRun(manual = true) {
-      if(runtime.dead || runtime.won || activeSlotRef.current===null)return;
+      if(training||runtime.dead || runtime.won || activeSlotRef.current===null)return;
       try {
         setSavedRuns(writeRunSlot(localStorage,activeSlotRef.current,snapshot()));
         if(manual){badge("save");notify(`RUN SAVED · SLOT ${activeSlotRef.current+1} · ROOM ${runtime.room}`);}
       } catch {if(manual)notify("SAVE FAILED · BROWSER STORAGE UNAVAILABLE");}
     }
     async function hostParty(){
+      if(training){notify('FINISH OR LEAVE PRACTICE BEFORE JOINING MULTIPLAYER');return;}
       try{
         if(!assetsReady){setPartyStatus("WAIT FOR THE FACILITY TO LOAD");return;}
         const inGame=runtime.running||screenRef.current==="pause"||screenRef.current==="inventory";
@@ -2097,6 +2042,7 @@ export default function IonGame() {
       }catch(error){setPartyStatus(error instanceof Error?error.message:"Could not host room");party.close();}
     }
     async function joinParty(code:string){
+      if(training){notify('FINISH OR LEAVE PRACTICE BEFORE JOINING MULTIPLAYER');return;}
       const normalized=parsePartyInvite(code);
       if(!normalized){setPartyStatus("Paste a valid ION invite link");return;}
       if(!assetsReady){setPartyStatus("WAIT FOR THE FACILITY TO LOAD");return;}
@@ -2152,17 +2098,62 @@ export default function IonGame() {
     let pendingRun: "fresh"|"resume"|null=null;
     let pendingHost=false;
     function startNewSlot(slot:number){
+      if(training)finishTraining();
       if(slot<0||slot>2)return;activeSlotRef.current=slot;
       partyRef.current?.close();setPartyStatus("PLAY SOLO OR CONNECT TO A FRIEND");
       setTutorialStep(0);start(true);
     }
     function loadSlot(slot:number){
+      if(training)finishTraining();
       const save=readRunSlots<SaveData>(localStorage)[slot]?.state;
       if(!save){notify("NO SAVED RUN IN THIS SLOT");return;}
       partyRef.current?.close();activeSlotRef.current=slot;
       runtime.dead=false;runtime.won=false;applySave(save);start(false);
     }
+    function openGuide(){guideReturn=screenRef.current;setTutorialStep(0);runtime.running=false;runtime.keysDown.clear();showScreen('tutorial');if(document.pointerLockElement)document.exitPointerLock();}
+    function closeGuide(){if(guideReturn===null)resume();else showScreen(guideReturn);}
+    function startTraining(){
+      if(!assetsReady)return;
+      if(party.role||party.connection?.open){notify('LEAVE THE PARTY BEFORE STARTING SAFE PRACTICE');return;}
+      if(training){closeGuide();return;}
+      training={step:0,save:snapshot(),checkpoint:runtime.checkpoint,screen:screenRef.current==='tutorial'?guideReturn:screenRef.current,origin:new THREE.Vector3(),yaw:0,lightToggles:0,hidden:false,elapsed:0,marker:null};
+      resetRun();runtime.keysDown.clear();runtime.touchMove={x:0,y:0,sprint:false};runtime.flashlightOn=true;runtime.noiseActive=false;runtime.grinIncoming=false;runtime.roomEntitySpawned=true;
+      runtime.requiredResonators=1;runtime.activeResonators=0;runtime.mandatoryCrystal=null;runtime.mandatoryCollected=true;
+      const quartz=makePickup('crystal',new THREE.Vector3(0,.35,runtime.roomLength/2-8),'quartz');quartz.userData.practiceTarget=true;
+      addStation('resonator',new THREE.Vector3(2.5,0,runtime.roomLength/2-10),0x37ffb2);
+      training.origin.copy(runtime.player);training.yaw=runtime.yaw;
+      runtime.running=true;runtime.dead=false;runtime.won=false;setPracticeStep(0);showScreen(null);refreshObjective();
+      if(!runtime.audio)runtime.audio=new AudioEngine();runtime.audio.resume();
+      if(!window.matchMedia('(pointer: coarse)').matches)void canvas.requestPointerLock()?.catch(()=>{});
+      notify('SAFE PRACTICE · YOUR SAVED DESCENT IS PROTECTED');updateHud(true);
+    }
+    function finishTraining(){
+      if(!training)return;
+      const prior=training;runtime.running=false;applySave(prior.save);runtime.checkpoint=prior.checkpoint;
+      training=null;setPracticeStep(null);runtime.running=false;runtime.keysDown.clear();showScreen(prior.screen??'pause');updateHud(true);
+      if(document.pointerLockElement)document.exitPointerLock();
+    }
+    function updateTraining(dt:number){
+      if(!training||training.step>=7)return;const t=training;t.elapsed+=dt;runtime.battery=100;runtime.spawnGrace=5;
+      let complete=false;
+      if(t.step===0)complete=runtime.player.distanceTo(t.origin)>3&&Math.abs(runtime.yaw-t.yaw)>.25;
+      if(t.step===1)complete=t.lightToggles>=2;
+      if(t.step===2)complete=runtime.crystals.quartz>0;
+      if(t.step===3)complete=runtime.activeResonators>=1;
+      if(t.step===4){if(runtime.hiding)t.hidden=true;complete=t.hidden&&!runtime.hiding;}
+      if(t.step===5)complete=runtime.noiseCount>=5;
+      if(complete){
+        t.step++;setPracticeStep(t.step);notify(`PRACTICE ${t.step+1}/7 · ${PRACTICE_STEPS[t.step]?.title.toUpperCase()}`);
+        if(t.step===5){runtime.noiseActive=true;runtime.noiseTime=45;runtime.noiseCount=0;addNoiseEncounter();refreshObjective();}
+      }
+      const target=t.step===2?runtime.pickups.find(p=>p.object.userData.practiceTarget)?.object:t.step===3?runtime.stations.find(s=>s.kind==='resonator'&&!s.activated)?.object:t.step===4?runtime.stations.find(s=>s.kind==='trapdoor')?.object:t.step===6?runtime.door:null;
+      if(target){
+        if(!t.marker){t.marker=new THREE.Mesh(new THREE.TorusGeometry(.6,.045,5,24),new THREE.MeshBasicMaterial({color:0x6affc1,depthTest:false,depthWrite:false}));t.marker.name='practice-target';t.marker.userData.layoutGeometry=true;t.marker.renderOrder=9999;runtime.roomGroup.add(t.marker);}
+        t.marker.visible=true;t.marker.position.copy(target.position).add(new THREE.Vector3(0,1.2,0));t.marker.rotation.y=runtime.yaw;
+      }else if(t.marker)t.marker.visible=false;
+    }
     function start(fresh = false) {
+      if(training)finishTraining();
       if(!assetsReady)return;
       pendingRun=fresh?"fresh":"resume";
       if(!fresh){chosenBoons.current=[...runtime.boons];setSelectedBoons([...runtime.boons]);}
@@ -2185,11 +2176,13 @@ export default function IonGame() {
       if(activeSlotRef.current!==null)saveRun(false);
       if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock()?.catch(()=>{}); updateHud(true);
     }
+    function pause(){if(!runtime.running||runtime.dead)return;runtime.running=false;runtime.keysDown.clear();runtime.touchMove={x:0,y:0,sprint:false};showScreen('pause');if(document.pointerLockElement)document.exitPointerLock();}
     function resume() {
       if (runtime.dead || runtime.won) return; runtime.running = true; runtime.cameraMode = false; showScreen(null); runtime.audio?.resume();
       if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock()?.catch(()=>{});
     }
     function kill(reason: string, kind: EnemyKind = "entity") {
+      if(training)return;
       if (runtime.dead || runtime.spawnGrace > 0 && kind !== "noise") return;
       if (runtime.wardCharges > 0 && kind !== "noise" && !runtime.boons.includes("fragile")&&!runtime.boons.includes("glassbody")) {
         runtime.wardCharges -= 1; runtime.spawnGrace = 4;
@@ -2217,7 +2210,7 @@ export default function IonGame() {
       if(!object)return false;
       if(runtime.mineSwing>0)return true;
       if(st?.needsShield&&runtime.inventory.resonationShield<1){notify("RESONATION SHIELD REQUIRED · SEARCH THE CABINET");return true;}
-      runtime.mineSwing=1;const total=miningHits(runtime.pickaxeLevel,Boolean(st)||runtime.chaseRoom||runtime.haidIniActive||runtime.noiseActive);
+      runtime.mineSwing=1;const total=st?.kind==='resonator'&&runtime.layout==='inversion'?1:miningHits(runtime.pickaxeLevel,Boolean(st)||runtime.chaseRoom||runtime.haidIniActive||runtime.noiseActive);
       object.userData.mineHits=(object.userData.mineHits??0)+1;
       runtime.audio?.pulse('step');object.scale.multiplyScalar(.94);
       if(object.userData.mineHits>=total){
@@ -2294,6 +2287,7 @@ export default function IonGame() {
     function toggleLight() {
       if(voidBlocked())return;
       if (runtime.battery <= 0 && !runtime.flashlightOn) { notify("BATTERY DEPLETED"); runtime.audio?.pulse("error"); return; }
+      if(training)training.lightToggles++;
       runtime.flashlightOn = !runtime.flashlightOn; runtime.flashlight.visible = runtime.flashlightOn; runtime.luxuryLight.visible = runtime.flashlightOn; updateHud(true);
     }
     function jump() {
@@ -2344,7 +2338,7 @@ export default function IonGame() {
     function collectNoiseSpecimen(){
       badge("specimen");runtime.noiseCount+=1;
       runtime.enemies.filter(e=>e.kind==="blob"||e.kind==="remetons").forEach(e=>e.stunTimer=Math.max(e.stunTimer??0,.65));
-      if(runtime.noiseCount>=5){runtime.noiseActive=false;runtime.enemies.filter(e=>e.kind==="noise"&&e.alive).forEach(removeEnemy);notify("5/5 SPECIMENS · NOISE SILENCED");}
+      if(runtime.noiseCount>=5){runtime.noiseActive=false;updateNoiseAssist(runtime.roomGroup,[],false,0);runtime.enemies.filter(e=>e.kind==="noise"&&e.alive).forEach(removeEnemy);notify("5/5 SPECIMENS · NOISE SILENCED");}
       else notify(`NOISE SPECIMEN ${runtime.noiseCount}/5`);
     }
     function refreshObjective() {
@@ -2400,6 +2394,11 @@ export default function IonGame() {
       },2600);
     }
     function advanceDimension(){
+      if(training){
+        if(training.step===6){training.step=7;setPracticeStep(7);runtime.running=false;runtime.keysDown.clear();showScreen('trainingComplete');if(document.pointerLockElement)document.exitPointerLock();}
+        else notify('FINISH THE CURRENT PRACTICE TASK FIRST');
+        return;
+      }
       if(runtime.layout==='inversion')badge('secret','layout-inversion');
       if(runtime.encounters.voidDebt){buildRoom(Math.min(199,runtime.room+1));return;}
       if(runtime.loreRoute.phase==='redox'){
@@ -2445,19 +2444,9 @@ export default function IonGame() {
         const found:string[]=[];
         for(const [key,count] of Object.entries(loot)){if(count){runtime.inventory[key as ItemKey]+=count;found.push(ITEMS[key as ItemKey].label);}}
         if(loot.goldBar){badge("paradox","ascended");if(runtime.paradoxWorld)badge("paradox","ascendidox");}
-        if(runtime.noiseActive && runtime.stations.some(s=>s.kind==="noiseCore")){
-          collectNoiseSpecimen();found.push("Noise Capsule");refreshObjective();
-        }
         notify(found.length?`CABINET · ${found.join(" · ").toUpperCase()}`:"CABINET EMPTY");updateHud(true);return;
       }
-      if(kind==="noiseCore"){
-        if(!station||station.activated||!runtime.noiseActive)return;
-        const crystal=(["quartz","obsidian","citrine"] as CrystalKey[]).find(key=>runtime.crystals[key]>0);
-        if(!crystal){notify("NOISE DEMANDS QUARTZ, OBSIDIAN OR CITRINE · SEARCH THE ROOM");return;}
-        runtime.crystals[crystal]--;station.activated=true;collectNoiseSpecimen();
-        notify(`${CRYSTALS[crystal].label.toUpperCase()} SACRIFICED · CAPSULE RELEASED`);
-        refreshObjective();updateHud(true);return;
-      }
+      if(kind==="noiseCore")return; // Legacy saved stations never charge a crystal.
       if(kind==="rift"){
         if(!runtime.stations.some(s=>s.kind==="rift")){notify("NO RIFT IN THIS ROOM");return;}
         if(party.role==="guest"){party.send({type:"action",room:runtime.room,action:"rift"});notify("WAITING FOR THE HOST TO CROSS THE RIFT");return;}
@@ -2640,6 +2629,7 @@ export default function IonGame() {
     }
     function close() { runtime.cameraMode = false; runtime.running = true; showScreen(null); if (!window.matchMedia("(pointer: coarse)").matches) void canvas.requestPointerLock()?.catch(()=>{}); }
     function restartCheckpoint() {
+      if(training){finishTraining();return;}
       runtime.dead = false; let save = runtime.checkpoint;
       if (!save) { try { const raw = localStorage.getItem("ion-checkpoint"); if (raw) save = JSON.parse(raw) as SaveData; } catch { save = null; } }
       // Never jump forward to a stale checkpoint from an earlier descent.
@@ -2660,7 +2650,7 @@ export default function IonGame() {
     }
     function touchLookEnd(id: number) { if (runtime.lastTouchLook?.id === id) runtime.lastTouchLook = null; }
 
-    actionRef.current = {toggleGraphics,toggleView,upgradePickaxe,repairJar,customize, start, resume, interact, fire, toggleLight, jump, close, craft, infuse, synthesizeFluorite,
+    actionRef.current = {pause,openGuide,closeGuide,startTraining,finishTraining,toggleGraphics,toggleView,upgradePickaxe,repairJar,customize, start, resume, interact, fire, toggleLight, jump, close, craft, infuse, synthesizeFluorite,
       buyPersItem, buyBasdino, openInventory, useItem, banish, restartCheckpoint,
       toggleJar,exploreExtraction,
       confirmBoons,rememberNumber,answerMemory,offerVoid,offerLore,nextLoreScene,startNewSlot,loadSlot,saveRun:()=>saveRun(true),hostParty,joinParty,redeemBadgeCode,grantBadge,toggleBoon,completeArchive,leaveParty,openBadges,closeBadges,
@@ -2684,7 +2674,7 @@ export default function IonGame() {
         if(!visible(station.object.position))return;
         const distance = station.object.position.clone().add(new THREE.Vector3(0,.85,0)).distanceTo(runtime.player);
         if (distance < bestDistance && !(station.activated && (station.kind === "resonator" || station.kind === "cabinet" || station.kind === "noiseCore"))) { bestDistance = distance; runtime.nearest = { kind: "station", index };
-          runtime.prompt = station.kind === "noiseCore" ? "E  SACRIFICE QUARTZ / OBSIDIAN / CITRINE FOR CAPSULE" : station.kind === "lore" ? "E  OFFER VIAL OF SÁNG TO LORE" : station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
+          runtime.prompt = station.kind === "noiseCore" ? "NOISE · COLLECT THE OPEN CAPSULES" : station.kind === "lore" ? "E  OFFER VIAL OF SÁNG TO LORE" : station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
             : station.kind === "trapdoor" ? runtime.chaseRoom ? "TRAPDOOR JAMMED · KEEP RUNNING" : runtime.haidIniActive ? runtime.hiding ? "E  EXIT · HAID-INI CAN ENTER" : "E  HIDE · UNSAFE FROM HAID-INI" : runtime.hiding ? "E  EXIT TRAPDOOR" : "E  HIDE IN TRAPDOOR"
             : station.kind === "resonator" ? runtime.layout==='inversion'&&!station.activated ? "E / CLICK · PICKAXE · BREAK ANCHOR" : station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  EXTRACT · RESONATION SHIELD REQUIRED" : "E / CLICK · PICKAXE · MINE RESONATOR"
             : `E  USE ${station.kind.replace("infusionsmith", "INFUSIONSMITH").toUpperCase()}`; }
@@ -2846,13 +2836,15 @@ export default function IonGame() {
       runtime.audio?.setEntity(main?.object.position ?? new THREE.Vector3(), mainDistance, Boolean(main));
     }
     function updateWorld(dt: number) {
+      if(runtime.layout==='flooded')animateFloodedScenery(runtime.roomGroup,performance.now()*.001);
+      if(training)updateTraining(dt);
       if(runtime.layout==='inversion')updateInversion(dt);
       if(runtime.resonatorWorld)updateResonatorTrial(dt);
       runtime.spawnGrace = Math.max(0, runtime.spawnGrace - dt);
       if(runtime.noiseActive){
         runtime.noiseTime=Math.max(0,runtime.noiseTime-dt);runtime.noisePulseTimer-=dt;
         if(runtime.noisePulseTimer<=0){runtime.audio?.pulse("error");runtime.noisePulseTimer=Math.max(.8,runtime.noiseTime/15);}
-        if(runtime.noiseTime<=0){kill("NOISE RUPTURED YOUR EARDRUMS · FIVE SPECIMENS WERE REQUIRED","noise");return;}
+        if(runtime.noiseTime<=0){if(training){runtime.noiseTime=10;notify('PRACTICE ONLY · TIMER RESET · FOLLOW THE RED CAPSULES');}else{kill("NOISE RUPTURED YOUR EARDRUMS · FIVE SPECIMENS WERE REQUIRED","noise");return;}}
       }
       if (runtime.chaseRoom || runtime.haidIniActive || runtime.persHubActive) {
         runtime.enemies.filter((enemy) => enemy.kind === "entity" && enemy.alive).forEach(removeEnemy);
@@ -2880,6 +2872,7 @@ export default function IonGame() {
           }
         }
       }
+      updateNoiseAssist(runtime.roomGroup,runtime.pickups.filter(p=>p.kind==='specimen').map(p=>({object:p.object,kind:'capsule' as const})),runtime.noiseActive,runtime.noiseTime);
       runtime.hazards.forEach((hazard, index) => {
         hazard.cooldown = Math.max(0, hazard.cooldown - dt);
         hazard.phase += dt * (1.6 + runtime.tier * 0.08);
@@ -3055,6 +3048,8 @@ export default function IonGame() {
   }, []);
 
   const act = actionRef.current;
+  const openFieldGuide=()=>{setTutorialStep(0);if(act)act.openGuide();else showScreen('tutorial');};
+  const closeFieldGuide=()=>{if(act)act.closeGuide();else showScreen('start');};
   const currentInfusion = hud.gunInfusion ?? hud.lightInfusion;
   const discoveredPercent = Math.round((hud.discovered.length / CRYSTAL_KEYS.length) * 100);
   const inventoryCount = Object.values(hud.inventory).reduce((sum, count) => sum + count, 0);
@@ -3087,6 +3082,7 @@ export default function IonGame() {
           </div>
         </section>
         {hud.encounters.voidDebt&&<aside className="void-debt"><strong>VOID · {hud.encounters.voidDebt.paid}/50 CRYSTALS · {hud.encounters.voidDebt.doorsLeft} DOORS LEFT</strong><p>Equipment and stations are sealed. Gather crystals and choose one of five Void passages.</p><button onClick={()=>actionRef.current?.offerVoid()}>OFFER CARRIED CRYSTALS</button></aside>}
+        {touchCapable&&<button className="mobile-pause" onClick={()=>act?.pause()}>PAUSE</button>}
         <button className="view-toggle" onClick={()=>act?.toggleView()}>{hud.thirdPerson?"FIRST PERSON":"THIRD PERSON"} [V]</button>
         <button className="inventory-toggle" onClick={() => actionRef.current?.openInventory()}>INVENTORY [I] <b>{inventoryCount}</b></button>
         <button className="badge-toggle" onClick={() => actionRef.current?.openBadges()}>BADGES <b>{hud.badgeCount}/{BADGES.length}</b></button>
@@ -3096,7 +3092,7 @@ export default function IonGame() {
           {CRYSTAL_KEYS.map((key) => <div className={hud.discovered.includes(key) ? "found" : "unknown"} key={key}><i style={{ background: CRYSTALS[key].css }} /><span>{CRYSTALS[key].short}</span><b>{hud.crystals[key]}</b></div>)}
         </section>
         {hud.chaseLevel > 0 && <div className="chase-alert"><span>PURSUIT · ROOM {hud.chaseStage}/5 · LEVEL {hud.chaseLevel}</span><strong>{hud.blobDistance.toFixed(1)} M BEHIND</strong><small>RESONATORS {hud.resonatorsTuned}/4 · SPECIMENS {hud.noiseCount}/5</small><i /></div>}
-        {hud.noiseActive && !hud.infectionCaption && <section className={`noise-alert ${hud.noiseTime<10?"critical":""}`} aria-label="Noise survival countdown"><span>NOISE · PRESSURE RUPTURE</span><strong>{Math.ceil(hud.noiseTime)}s</strong><b>SPECIMENS {hud.noiseCount}/5</b><small>COLLECT THE CYAN CAPSULES · HIDING WILL NOT HELP</small></section>}
+        {hud.noiseActive && !hud.infectionCaption && <section className={`noise-alert ${hud.noiseTime<=10?"critical":""}`} aria-label="Noise survival countdown"><span>NOISE · PRESSURE RUPTURE</span><strong>{Math.ceil(hud.noiseTime)}s</strong><b>SPECIMENS {hud.noiseCount}/5</b><small>{hud.noiseTime<=10?"RED CAPSULES VISIBLE THROUGH WALLS":"COLLECT FIVE OPEN CYAN CAPSULES"}</small></section>}
         {hud.hiding && <div className="trapdoor-status"><span>TRAPDOOR SEALED</span><strong>{hud.haidIniActive ? "HAID-INI CAN ENTER · MOVE" : "CONTACT IMMUNITY ACTIVE"}</strong><small>E · EXIT HIDING PLACE</small></div>}
         {hud.boons.length>0&&!screen&&<div className="boon-hud">{hud.boons.map(id=>BOONS.find(b=>b.id===id)?.name).join(" · ")}{hud.resonatorWorld?" · DOOR 300":""}</div>}
         {hud.prompt && !screen && <div className="interaction-prompt">{hud.prompt}</div>}{toast && <div className="toast">{toast}</div>}
@@ -3106,29 +3102,33 @@ export default function IonGame() {
         <div className="mission-brief"><p>Reach <strong>Room 200</strong>. Recover every infusion. Survive contact.</p><div className="rules-grid">
           <span><b>7% GRIN ROLL</b> gives 10 seconds to hide</span><span><b>FLUORITE</b> is synthesized currency for Pers</span><span><b>ROOM 25×</b> starts a Blob chase · Hub at 32</span></div></div>
         <button className="text-button" onClick={()=>showScreen("boons")}>BOONS · {selectedBoons.length} SELECTED</button><button className="primary-button" onClick={() => showScreen("saves")}>PLAY · SAVED RUNS</button>
+        <button className="text-button" onClick={openFieldGuide}>TUTORIAL · GUIDE & SAFE PRACTICE</button>
         <button className="text-button" onClick={() => showScreen("party")}>PLAY WITH A FRIEND</button>
         <button className="text-button" onClick={()=>{customizeReturn.current='start';showScreen('customize');}}>CUSTOMISE SURVIVOR</button>
         <button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button>
         <div className="controls-copy">{touchCapable ? "LEFT PAD MOVE · RIGHT SIDE LOOK · USE THE ACTION BUTTONS" : "WASD MOVE · SPACE JUMP · CLICK FIRE / MINE · E INTERACT / MINE · I INVENTORY · P PAUSE · V CAMERA · F LIGHT · SHIFT RUN"}</div>
         <small className={`headphones ${webglUnavailable ? "danger" : ""}`}>{webglUnavailable ? "ION REQUIRES WEBGL 2 · OPEN ON A DEVICE WITH 3D GRAPHICS ENABLED" : assetProgress < 100 ? `PREPARING FACILITY · ${assetProgress}%` : "HEADPHONES RECOMMENDED · ONE-TOUCH DEATH · CHECKPOINTS EVERY 25 ROOMS"}</small>
       </section>}
+      {practiceStep!==null&&(!screen||screen==='pause')&&<aside className="practice-coach" aria-live="polite"><small>SAFE PRACTICE · {Math.min(practiceStep+1,7)}/7</small><strong>{PRACTICE_STEPS[practiceStep]?.title}</strong><p>{PRACTICE_STEPS[practiceStep]?.body}</p><button onClick={()=>act?.finishTraining()}>LEAVE PRACTICE</button></aside>}
+      {screen==='trainingComplete'&&<section className="overlay-panel compact-panel"><span className="eyebrow">FIELD INDUCTION COMPLETE</span><h2>READY TO DESCEND</h2><p>You moved, searched, mined, tuned, hid, silenced Noise and opened a pressure door. Your practice supplies stay here.</p><button className="primary-button" onClick={()=>act?.finishTraining()}>RETURN TO YOUR GAME</button><button className="text-button" onClick={()=>{act?.finishTraining();showScreen('saves');}}>CHOOSE A SAVE SLOT</button></section>}
       {screen === "tutorial" && <section className="tutorial-screen overlay-panel">
         <div className="tutorial-shell">
-          <header className="tutorial-header"><span>ION FIELD INDUCTION · {TUTORIAL_STEPS[tutorialStep].number} / {String(TUTORIAL_STEPS.length).padStart(2, "0")}</span><button disabled={webglUnavailable || assetProgress < 100} onClick={() => actionRef.current?.start(true)}>{assetProgress < 100 ? `LOADING ${assetProgress}%` : "SKIP TRAINING"}</button></header>
+          <header className="tutorial-header"><span>ION FIELD INDUCTION · {TUTORIAL_STEPS[tutorialStep].number} / {String(TUTORIAL_STEPS.length).padStart(2, "0")}</span><button onClick={closeFieldGuide}>CLOSE GUIDE</button></header>
           <div className="tutorial-visual" data-step={tutorialStep}>
-            <div className="tutorial-symbol">{TUTORIAL_STEPS[tutorialStep].number}</div>
+            <div className="guide-visual"><small>{TUTORIAL_STEPS[tutorialStep].label}</small><strong>{TUTORIAL_STEPS[tutorialStep].visual}</strong><span>FIELD NOTE {TUTORIAL_STEPS[tutorialStep].number}</span></div>
           </div>
-          <article className="tutorial-copy"><small>{TUTORIAL_STEPS[tutorialStep].label}</small><h2>{TUTORIAL_STEPS[tutorialStep].title}</h2><p>{TUTORIAL_STEPS[tutorialStep].body}</p><div className="tutorial-control"><b>CONTROLS</b> · {touchCapable ? TUTORIAL_STEPS[tutorialStep].touch : TUTORIAL_STEPS[tutorialStep].desktop}</div></article>
+          <article className="tutorial-copy"><small>{TUTORIAL_STEPS[tutorialStep].label}</small><h2>{TUTORIAL_STEPS[tutorialStep].title}</h2><p>{TUTORIAL_STEPS[tutorialStep].body}</p><div className="guide-goal"><b>TRY THIS</b><span>{TUTORIAL_STEPS[tutorialStep].goal}</span></div><div className="tutorial-control"><b>CONTROLS</b> · {touchCapable ? TUTORIAL_STEPS[tutorialStep].touch : TUTORIAL_STEPS[tutorialStep].desktop}</div></article>
           <footer className="tutorial-footer">
             <div className="tutorial-dots">{TUTORIAL_STEPS.map((step, index) => <i key={step.number} className={index === tutorialStep ? "active" : index < tutorialStep ? "done" : ""} />)}</div>
             <div className="tutorial-actions">
               {tutorialStep > 0 && <button onClick={() => setTutorialStep((step) => step - 1)}>BACK</button>}
-              <button className="primary" disabled={(webglUnavailable || assetProgress < 100) && tutorialStep === TUTORIAL_STEPS.length - 1} onClick={() => tutorialStep === TUTORIAL_STEPS.length - 1 ? actionRef.current?.start(true) : setTutorialStep((step) => step + 1)}>{tutorialStep === TUTORIAL_STEPS.length - 1 ? (webglUnavailable ? "3D UNAVAILABLE" : assetProgress < 100 ? `LOADING ${assetProgress}%` : "ENTER FACILITY") : "NEXT"}</button>
+              <button className="primary" onClick={()=>tutorialStep===TUTORIAL_STEPS.length-1?closeFieldGuide():setTutorialStep(step=>step+1)}>{tutorialStep===TUTORIAL_STEPS.length-1?'RETURN':'NEXT CHAPTER'}</button>
+              <button className="primary" disabled={webglUnavailable||assetProgress<100||practiceStep!==null} onClick={()=>act?.startTraining()}>{webglUnavailable?'3D UNAVAILABLE':assetProgress<100?`LOADING ${assetProgress}%`:'SAFE PRACTICE'}</button>
             </div>
           </footer>
         </div>
       </section>}
-      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={()=>act?.toggleGraphics()}>GRAPHICS · {cinematicGraphics?"CINEMATIC":"PERFORMANCE"}</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyConnected?"CONNECTED":hud.partyCode?"INVITE READY":"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
+      {screen === "pause" && <section className="pause-screen overlay-panel compact-panel"><span className="eyebrow">FACILITY LINK SUSPENDED</span><h2>PAUSED</h2><p>Room {String(hud.room).padStart(3, "0")} · {hud.roomName}</p><button className="primary-button" onClick={() => actionRef.current?.resume()}>RESUME DESCENT</button><button className="text-button" onClick={openFieldGuide}>FIELD GUIDE & SAFE PRACTICE</button><button className="text-button" onClick={()=>act?.toggleGraphics()}>GRAPHICS · {cinematicGraphics?"CINEMATIC":"PERFORMANCE"}</button><button className="text-button" onClick={() => actionRef.current?.saveRun()}>SAVE RUN · SLOT {activeSlotRef.current===null?"NONE":activeSlotRef.current+1}</button><button className="text-button" onClick={() => showScreen("party")}>MULTIPLAYER · {hud.partyConnected?"CONNECTED":hud.partyCode?"INVITE READY":"CONNECT"}</button><button className="text-button" onClick={() => actionRef.current?.openBadges()}>BADGES {badgeProgress.unlocked.length}/{BADGES.length}</button><button className="text-button" onClick={() => showScreen("saves")}>SWITCH SAVED RUN</button></section>}
       {screen === "dead" && <section className="death-screen creature-death overlay-panel compact-panel" data-scare={hud.deathKind} style={{"--scare-color":`#${MONSTER_COLORS[hud.deathKind].toString(16).padStart(6,"0")}`} as React.CSSProperties}><div className="scare-distortion" aria-hidden="true" /><div className="death-copy"><span className="eyebrow danger">VITAL SIGNAL TERMINATED</span><h2>{MONSTER_NAMES[hud.deathKind]}</h2><p>{hud.deathReason}</p><div className="death-room">ROOM {String(hud.room).padStart(3, "0")}</div><div className="serp-review"><div className="serp-face" aria-label="SERP, a figure carrying a yellow light"><i /></div><strong>SERP · A LIGHT AFTER THE END</strong><p>{serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).well}</p><p>{serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).percent}% of this route completed.</p><p>Next time: {serpAdvice(hud.deathKind,hud.room,Object.values(hud.crystals).reduce((a,b)=>a+b,0),hud.loreRoute.phase).next}</p></div>{hud.partyConnected&&<p>YOUR TEAMMATE CAN REVIVE YOU NEARBY</p>}<button className="primary-button danger-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.restartCheckpoint();}}>RETURN TO CHECKPOINT SOLO</button><button className="text-button" onClick={() => {actionRef.current?.leaveParty();actionRef.current?.start(true);}}>NEW DESCENT</button></div></section>}
       {screen === "saves" && <MenuShell title="SAVED RUNS" subtitle="Three independent local slots · rooms save automatically when entered" onClose={() => showScreen("start")}><div className="save-grid">
         {savedRuns.map((slot,index)=><article className="save-card" key={index}><small>SLOT {index+1}</small><strong>{slot?`ROOM ${String(slot.state.room).padStart(3,"0")}`:"EMPTY SLOT"}</strong><p>{slot?`Saved ${new Date(slot.savedAt).toLocaleString()} · ${slot.state.discovered?.length??0}/7 minerals`:"Start a new descent and save automatically."}</p>{slot&&<button onClick={()=>actionRef.current?.loadSlot(index)}>CONTINUE RUN</button>}<button className="secondary" onClick={()=>actionRef.current?.startNewSlot(index)}>{slot?"NEW RUN IN THIS SLOT":"START NEW RUN"}</button></article>)}

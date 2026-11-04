@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {addFloodedScenery} from './floodedScenery';
 import {floorProfile,mazeBarriers,type RoomType} from './roomTypes';
 export function buildRoomGeometry(group:THREE.Group,type:RoomType,width:number,length:number,height:number){
  const obstacles:THREE.Box3[]=[];
@@ -26,9 +27,10 @@ export function buildRoomGeometry(group:THREE.Group,type:RoomType,width:number,l
  }
  if(type==='grand')for(const x of [-width*.3,width*.3])for(const z of [-length*.22,length*.22])box(1.2,height,1.2,x,height/2,z,true);
  if(type==='flooded'){
-  const water=new THREE.Mesh(new THREE.PlaneGeometry(width,length),new THREE.MeshStandardMaterial({color:0x073e56,transparent:true,opacity:.8,roughness:.12}));water.userData.layoutGeometry=true;water.rotation.x=-Math.PI/2;water.position.y=.18;group.add(water);
-  // Grated raised paths connect the entrance, exit and supply islands.
-  box(3,.15,length,0,.24,0);for(const z of [-length*.25,0,length*.25])box(width,.15,2,0,.24,z);
+  // Submerged supports, rippled water, grating and tide marks share the same
+  // smooth movement plane. No decorative water geometry enters collisions.
+  box(3,.1,length,0,.21,0);for(const z of [-length*.25,0,length*.25])box(width,.1,2,0,.21,z);
+  addFloodedScenery(group,width,length);
  }
  if(type==='collapsed')for(let i=0;i<5;i++){const slab=box(1,.8,2,(i%2?1:-1)*(width/2-2),.5,-length/2+6+i*5);slab.rotation.z=(i%2?1:-1)*.4;}
  if(type==='inversion'){
