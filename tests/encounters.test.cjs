@@ -850,3 +850,18 @@ test('Drowned Lift needs three relays, persists its flood and carries a boarded 
  const pad=r.roomGroup.getObjectByName('lift-platform');r.player.set(0,1.65,pad.position.z);h.step(4);assert(r.lift.ride>3.8);assert(pad.position.y>1);assert(r.player.y>2.5);
  h.step(5);assert.equal(r.room,20);
 });
+
+
+test('co-op friends repair the Drowned Lift together and ride into the same next room',async()=>{
+ const relay=require('./multiplayerHarness.cjs').relayHarness();class Link extends relay.api.PartyLink{constructor(){super(relay.options);}}
+ const host=gameHarness(true,Link),guest=gameHarness(true,Link);await Promise.resolve();await Promise.resolve();host.act.startNewSlot(0);host.act.confirmBoons();host.enter(19);
+ await host.act.hostParty();await guest.act.joinParty('https://c-a-studios-viji.github.io/Ion/?join='+relay.sockets[0].topic.replace('realtime:ion-v2-',''));await relay.flush();
+ assert.equal(guest.runtime.layout,'drownedlift');
+ for(const s of guest.runtime.stations.filter(s=>s.kind==='liftPower')){guest.useAt(s.object);await relay.flush();}
+ assert.equal(host.runtime.lift.power,7);host.step(.2);await relay.flush();assert.equal(guest.runtime.lift.power,7);
+ guest.useAt(guest.runtime.stations.find(s=>s.kind==='liftConsole').object);await relay.flush();assert(host.runtime.lift.started);
+ for(const h of [host,guest])h.runtime.player.set(0,1.65,-h.runtime.roomLength/2+6);
+ for(let i=0;i<190&&host.runtime.room===19;i++){guest.step(.05);await relay.flush();host.step(.05);await relay.flush();}
+ assert.equal(host.runtime.room,20);await relay.flush();assert.equal(guest.runtime.room,20);assert(!host.runtime.dead&&!guest.runtime.dead);
+ host.act.leaveParty();guest.act.leaveParty();
+});

@@ -2916,6 +2916,7 @@ export default function IonGame() {
           if(runtime.lift.elapsed>=75&&!onPad){kill('THE DROWNED LIFT · FLOODWATER REACHED YOUR AIR SUPPLY','noise');return;}
           refreshObjective();
         }
+        if(party.role==='guest'&&runtime.lift.elapsed>=75&&runtime.lift.ride===0&&(Math.abs(runtime.player.x)>=2.35||Math.abs(runtime.player.z+runtime.roomLength/2-6)>=2.35)){kill('THE DROWNED LIFT · FLOODWATER REACHED YOUR AIR SUPPLY','noise');return;}
         if(party.role==='guest')runtime.stations.filter(s=>s.kind==='liftPower').forEach(s=>{s.activated=!!(runtime.lift.power&(1<<s.object.userData.relay));});
         drawLift(runtime.roomGroup,runtime.lift);
       }
