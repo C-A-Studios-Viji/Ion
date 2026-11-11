@@ -695,7 +695,7 @@ test('ordinary doors repeat the requested ten-layout cycle from the first door',
  const h=gameHarness(),types=h.load(path.join(root,'app/roomTypes.ts'));
  const expected=['standard','basement','duplex','grand','maze','multifloor','inversion','collapsed','flooded','observation'];
  for(let room=1;room<=80;room++){
-  assert.equal(types.roomTypeFor(room),room===32?'standard':expected[(room-1)%10]);
+  assert.equal(types.roomTypeFor(room),room===32?'standard':room%20===19?'drownedlift':expected[(room-1)%10]);
   if(room>1&&room!==32)assert.notEqual(types.roomTypeFor(room),types.roomTypeFor(room-1));
  }
  for(let room=1;room<=10;room++){h.enter(room);assert.equal(h.runtime.layout,expected[room-1]);}
@@ -804,4 +804,64 @@ test('legacy cabinet capsule progress resumes with only the outstanding open cap
  const slots=JSON.parse(h.saved.get('ion-saves-v1'));slots[0].state.noiseCount=1;slots[0].state.noiseActive=true;slots[0].state.removedPickups=[];h.saved.set('ion-saves-v1',JSON.stringify(slots));
  h.act.loadSlot(0);h.act.confirmBoons();assert.equal(h.runtime.pickups.filter(p=>p.kind==='specimen').length,4);
  h.runtime.enemies.forEach(e=>e.alive=false);for(const p of [...h.runtime.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);assert.equal(h.runtime.noiseCount,5);assert.equal(h.runtime.noiseActive,false);
+});
+
+
+test('branching mazes are deterministic connected trees with dead ends and opaque roofs',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();const {createMaze,mazePath,mazePoint,mazeWalls}=h.load(path.join(root,'app/maze.ts'));
+ for(const seed of [5,15,27,45]){
+  const m=createMaze(seed===27?54:42,seed===27?90:66,seed);
+  assert.equal(m.links.reduce((n,l)=>n+l.length,0)/2,m.links.length-1);
+  assert(m.links.filter(l=>l.length===1).length>=4);
+  assert(m.route.length>m.rows);assert.deepEqual(createMaze(m.width,m.length,seed).links,m.links);
+  for(let id=0;id<m.links.length;id++)assert(mazePath(m,0,id).length>0);
+  assert(mazeWalls(m).length>30);assert(Number.isFinite(mazePoint(m,0).x));
+ }
+ h.enter(5);const r=h.runtime;assert.equal(r.layout,'maze');
+ const roof=r.roomGroup.getObjectByName('sealed-maze-roof');assert(roof);assert.equal(roof.material.transparent,false);
+ assert(r.obstacles.some(b=>b.min.y>=r.roomHeight-.01));
+ const walls=r.roomGroup.children.filter(m=>m.userData.layoutGeometry&&m.isMesh&&m!==roof&&m.geometry.parameters.height===r.roomHeight);
+ assert(walls.length>30);assert(r.roomWidth>=42&&r.roomLength>=66);
+ r.player.y=3.4;r.verticalVelocity=8;r.grounded=false;h.step(.2);assert(r.player.y<=r.roomHeight-.3+.01);
+});
+
+test('Door 27 is the large roofed Blob maze with reachable ordered objectives and corridor pursuit',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(27,{start:25,type:'blob'});const r=h.runtime;
+ assert.equal(r.layout,'maze');assert.equal(r.roomWidth,54);assert.equal(r.roomLength,90);assert(r.spawnGrace>=9);
+ assert.equal(r.requiredResonators,4);assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,5);
+ assert(r.roomGroup.getObjectByName('sealed-maze-roof'));assert(r.noiseTime>180);
+ const {mazeCell,mazePoint}=h.load(path.join(root,'app/maze.ts'));
+ for(const o of [...r.stations.filter(v=>v.kind==='resonator').map(v=>v.object),...r.pickups.filter(v=>v.kind==='specimen'||v.mandatory).map(v=>v.object)])assert(r.maze.route.includes(mazeCell(r.maze,o.position.x,o.position.z)));
+ const blob=r.enemies.find(e=>e.kind==='blob');assert(blob);r.spawnGrace=0;
+ const destination=mazePoint(r.maze,r.maze.route[Math.min(8,r.maze.route.length-1)]);r.player.set(destination.x,1.65,destination.z);
+ for(let i=0;i<80&&!r.dead;i++){h.step(.05);const box=new THREE.Box3().setFromCenterAndSize(blob.object.position.clone().add(new THREE.Vector3(0,1,0)),new THREE.Vector3(.3,1.5,.3));assert(!r.obstacles.some(b=>b.intersectsBox(box)),'Blob crossed maze rock');}
+});
+
+test('Drowned Lift needs three relays, persists its flood and carries a boarded survivor to the next door',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(19);const r=h.runtime;assert.equal(r.layout,'drownedlift');assert(!r.noiseActive);assert(!r.doorUnlocked);
+ const console=r.stations.find(v=>v.kind==='liftConsole'),relays=r.stations.filter(v=>v.kind==='liftPower');assert.equal(relays.length,3);
+ h.useAt(console.object);assert(!r.lift.started);
+ for(const relay of relays)h.useAt(relay.object);assert.equal(r.lift.power,7);
+ r.mandatoryCollected=true;h.useAt(console.object);assert(r.lift.started);
+ h.step(2);assert(r.lift.elapsed>=2);assert(!r.doorUnlocked);
+ h.act.saveRun();const saved=JSON.parse(h.saved.get('ion-saves-v1'))[0].state;assert.equal(saved.lift.power,7);assert(saved.lift.elapsed>=2);
+ h.act.loadSlot(0);h.act.confirmBoons();assert.equal(r.lift.power,7);assert(r.lift.started);assert(r.lift.elapsed>=2);
+ const keys=r.accessKeys;r.player.set(0,1.65,-r.roomLength/2+1);h.step(.1);h.act.interact();assert.equal(r.accessKeys,keys);assert(!r.doorOpening);
+ const pad=r.roomGroup.getObjectByName('lift-platform');r.player.set(0,1.65,pad.position.z);h.step(4);assert(r.lift.ride>3.8);assert(pad.position.y>1);assert(r.player.y>2.5);
+ h.step(5);assert.equal(r.room,20);
+});
+
+
+test('co-op friends repair the Drowned Lift together and ride into the same next room',async()=>{
+ const relay=require('./multiplayerHarness.cjs').relayHarness();class Link extends relay.api.PartyLink{constructor(){super(relay.options);}}
+ const host=gameHarness(true,Link),guest=gameHarness(true,Link);await Promise.resolve();await Promise.resolve();host.act.startNewSlot(0);host.act.confirmBoons();host.enter(19);
+ await host.act.hostParty();await guest.act.joinParty('https://c-a-studios-viji.github.io/Ion/?join='+relay.sockets[0].topic.replace('realtime:ion-v2-',''));await relay.flush();
+ assert.equal(guest.runtime.layout,'drownedlift');
+ for(const s of guest.runtime.stations.filter(s=>s.kind==='liftPower')){guest.useAt(s.object);await relay.flush();}
+ assert.equal(host.runtime.lift.power,7);host.step(.2);await relay.flush();assert.equal(guest.runtime.lift.power,7);
+ guest.useAt(guest.runtime.stations.find(s=>s.kind==='liftConsole').object);await relay.flush();assert(host.runtime.lift.started);
+ for(const h of [host,guest])h.runtime.player.set(0,1.65,-h.runtime.roomLength/2+6);
+ for(let i=0;i<190&&host.runtime.room===19;i++){guest.step(.05);await relay.flush();host.step(.05);await relay.flush();}
+ assert.equal(host.runtime.room,20);await relay.flush();assert.equal(guest.runtime.room,20);assert(!host.runtime.dead&&!guest.runtime.dead);
+ host.act.leaveParty();guest.act.leaveParty();
 });

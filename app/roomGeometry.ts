@@ -1,7 +1,9 @@
 import * as THREE from 'three';
+import {makeCaveGroundMaterial} from './caveGroundMaterial';
 import {addFloodedScenery} from './floodedScenery';
-import {floorProfile,mazeBarriers,type RoomType} from './roomTypes';
-export function buildRoomGeometry(group:THREE.Group,type:RoomType,width:number,length:number,height:number){
+import {createMaze,mazeWalls} from './maze';
+import {floorProfile,type RoomType} from './roomTypes';
+export function buildRoomGeometry(group:THREE.Group,type:RoomType,width:number,length:number,height:number,seed=1){
  const obstacles:THREE.Box3[]=[];
  const metal=new THREE.MeshStandardMaterial({color:0x304859,roughness:.6,metalness:.5});
  function box(w:number,h:number,d:number,x:number,y:number,z:number,solid=false,material=metal){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);m.position.set(x,y,z);m.userData.layoutGeometry=true;m.castShadow=true;m.receiveShadow=true;group.add(m);if(solid)obstacles.push(new THREE.Box3().setFromObject(m));return m;}
@@ -16,17 +18,18 @@ export function buildRoomGeometry(group:THREE.Group,type:RoomType,width:number,l
   if(type==='basement')for(let i=0;i<6;i++)box(width,.25,.25,0,1.8,-length*.25+i*length*.1);
   if(type==='multifloor')for(const side of [-1,1])box(1,height,1,side*(width/2-1),height/2,0);
  }
- if(type==='maze')for(const [i,b] of mazeBarriers(width,length).entries()){
-  box(b.width,3,.65,b.side*3,1.5,b.z,true);
-  box(.18,1.8,.18,b.gapX,1,b.z,false,new THREE.MeshStandardMaterial({color:0x33ffcc,emissive:0x33ffcc,emissiveIntensity:2}));
-  if(i<4)box(.5,3,3,b.side*width*.2,1.5,b.z-2.2,true);
+ if(type==='maze'){
+  const maze=createMaze(width,length,seed),stone=makeCaveGroundMaterial();
+  for(const wall of mazeWalls(maze))box(wall.w,height,wall.d,wall.x,height/2,wall.z,true,stone);
+  // Opaque, double-sided roof joins full-height partitions. No overhead solution.
+  const roof=box(width,.3,length,0,height+.15,0,true,stone);roof.name='sealed-maze-roof';
  }
  if(type==='observation'){
   const glass=new THREE.MeshStandardMaterial({color:0x80dfff,transparent:true,opacity:.28,roughness:.15,metalness:.15});
   box(.2,3.5,length-12,0,1.75,0,true,glass);for(const z of [-(length-12)/2,(length-12)/2])box(.3,3.7,.3,0,1.85,z);
  }
  if(type==='grand')for(const x of [-width*.3,width*.3])for(const z of [-length*.22,length*.22])box(1.2,height,1.2,x,height/2,z,true);
- if(type==='flooded'){
+ if(type==='flooded'||type==='drownedlift'){
   // Submerged supports, rippled water, grating and tide marks share the same
   // smooth movement plane. No decorative water geometry enters collisions.
   box(3,.1,length,0,.21,0);for(const z of [-length*.25,0,length*.25])box(width,.1,2,0,.21,z);
