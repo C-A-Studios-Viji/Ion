@@ -20,7 +20,9 @@ import { goldBarSpawns, paradoxEncounter, isPrimeDoor } from "./paradox";
 import { BOONS, negativeBoons, candyOutcome, boonDoorStep, type BoonId } from "./boons";
 import { emptyLoreRoute, LORE_NIGHTMARES, serpAdvice, type LoreRoute } from "./loreRoute";
 import { emptyEntityEvents, createMemoryTrial, payVoid, type EntityEvents } from "./entityEvents";
-import { roomTypeFor, roomFloor, mazeBarriers, ROOM_LABELS, type RoomType } from './roomTypes';
+import {createMaze,mazePoint,mazeCell,mazePath,blobMazeRoom,type Maze} from './maze';
+import {freshLift,restoreLift,addDrownedLift,drawLift,type LiftState} from './drownedLift';
+import { roomTypeFor, roomFloor, ROOM_LABELS, type RoomType } from './roomTypes';
 import {TUTORIAL_STEPS,PRACTICE_STEPS} from './fieldGuide';
 import {updateNoiseAssist} from './noiseAssist';
 import {animateFloodedScenery} from './floodedScenery';
@@ -139,7 +141,7 @@ type Pickup = {
 
 type Station = {
   object: THREE.Group;
-  kind: "crafter" | "infusionsmith" | "archive" | "resonator" | "noiseCore" | "trapdoor" | "pershub" | "rift" | "cabinet" | "blood" | "rainbow" | "voiddoor" | "voidoffering" | "lore";
+  kind: "liftPower" | "liftConsole" | "crafter" | "infusionsmith" | "archive" | "resonator" | "noiseCore" | "trapdoor" | "pershub" | "rift" | "cabinet" | "blood" | "rainbow" | "voiddoor" | "voidoffering" | "lore";
   activated?: boolean;
   needsShield?: boolean;
 };
@@ -173,6 +175,8 @@ type Runtime = {
   pickaxeModel:THREE.Group;
   appearance:Appearance;
   layout: RoomType;
+  lift: LiftState;
+  maze: Maze | null;
   inversionTime: number;
   inversionMercyUsed:boolean;
   inversionActor: THREE.Group | null;
@@ -308,6 +312,7 @@ type Runtime = {
 type SaveData = {
   pickaxeLevel?:number;
   miningProgress?:Record<string,number>;
+  lift?: LiftState;
   inversionTime?: number;
   inversionMercyUsed?:boolean;
   loreRoute?:LoreRoute;
@@ -836,7 +841,7 @@ export default function IonGame() {
     const runtime: Runtime = {
       chaseState: null, noiseActive: false, noiseCount: 0, noiseTime: 0, noisePulseTimer: 0,
       infectionTime: -1, infectionActors: null, deathKind: "entity", scareActor: null, scareTime: 0,
-      layout: "standard", inversionTime: 0, inversionMercyUsed:false, inversionActor: null, inversionLight: null,
+      layout: "standard", lift:freshLift(),maze:null, inversionTime: 0, inversionMercyUsed:false, inversionActor: null, inversionLight: null,
       pickaxeLevel:0,mineSwing:0,thirdPerson:false,localAvatar,pickaxeModel,appearance, renderer, scene, camera, roomGroup, roomWidth: 17, roomLength: 25, roomHeight: 6,
       room: 1, roomName: "Intake Corridor", tier: 0, player: new THREE.Vector3(0, 1.65, 8),
       verticalVelocity: 0, grounded: true,
@@ -937,6 +942,9 @@ export default function IonGame() {
           const index=runtime.pickups.findIndex(p=>p.object.userData.pickupId===message.id);
           if(index>=0)collect(index,true);
         }
+        if(message.action==='lift'&&party.role==='host'){
+          const station=runtime.stations[message.id!];if(station&&(station.kind==='liftPower'||station.kind==='liftConsole'))openStation(station.kind,station);
+        }
         if(message.action==="resonator"){
           const station=runtime.stations[message.id!];if(station?.kind==="resonator")openStation("resonator",station);
         }
@@ -947,6 +955,7 @@ export default function IonGame() {
       }
       if(message.type==="world"&&party.role==="guest"&&message.room===runtime.room){
         runtime.noiseTime=Math.min(runtime.noiseTime,message.noiseTime);
+        if(message.lift&&runtime.layout==='drownedlift'){runtime.lift=restoreLift(message.lift);refreshObjective();}
         runtime.grinIncoming=message.grinIncoming;runtime.grinWarningTimer=message.grinWarningTimer;
         if(message.doorOpening)runtime.doorOpening=true;
         message.enemies.forEach((state,index)=>{
@@ -1507,7 +1516,8 @@ export default function IonGame() {
 
     function finishRoomLayout(restored:boolean){
       if(runtime.layout==='standard')return;
-      const layoutObstacles=buildRoomGeometry(runtime.roomGroup,runtime.layout,runtime.roomWidth,runtime.roomLength,runtime.roomHeight);
+      if(runtime.layout==='maze')runtime.obstacles=[];
+      const layoutObstacles=buildRoomGeometry(runtime.roomGroup,runtime.layout,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,runtime.room);
       // Shift collision bounds and interactables onto the same continuous floors.
       runtime.obstacles.forEach(box=>{const c=box.getCenter(new THREE.Vector3());box.translate(new THREE.Vector3(0,roomFloor(runtime.layout,runtime.roomLength,c.z),0));});
       runtime.obstacles.push(...layoutObstacles);
@@ -1527,6 +1537,15 @@ export default function IonGame() {
       runtime.enemies.forEach(e=>{e.object.position.y=roomFloor(runtime.layout,runtime.roomLength,e.object.position.z);});
       runtime.hazards.forEach(h=>{h.object.position.y=roomFloor(runtime.layout,runtime.roomLength,h.object.position.z);});
       if(!restored)runtime.player.y=1.65+roomFloor(runtime.layout,runtime.roomLength,runtime.player.z);
+      if(runtime.layout==='drownedlift'){
+        addDrownedLift(runtime.roomGroup,runtime.roomLength);
+        for(let i=0;i<3;i++){
+          const relay=createStation('resonator',0xff9d2f);relay.position.set((i%2?1:-1)*7,0,runtime.roomLength/2-8-i*10);relay.userData.relay=i;
+          runtime.roomGroup.add(relay);runtime.stations.push({kind:'liftPower',object:relay,activated:!!(runtime.lift.power&(1<<i))});
+        }
+        const console=createStation('resonator',0x44ffaa);console.position.set(0,0,runtime.roomLength/2-7);runtime.roomGroup.add(console);runtime.stations.push({kind:'liftConsole',object:console});
+        drawLift(runtime.roomGroup,runtime.lift);
+      }
       if(runtime.layout==='inversion'){
         runtime.stations.filter(s=>s.kind==='resonator').forEach((s,i)=>{s.needsShield=false;s.object.position.set(i===1?5:-5,0,(i-1)*9);});
         runtime.inversionActor=createPersModel();runtime.inversionActor.rotation.z=Math.PI;runtime.inversionActor.position.set(0,runtime.roomHeight-1,0);runtime.roomGroup.add(runtime.inversionActor);
@@ -1609,11 +1628,14 @@ export default function IonGame() {
       if(runtime.resonatorWorld){runtime.roomWidth=18;runtime.roomLength=140;runtime.roomName="RESONATOR · DOOR 300 · CONVERGENCE";}
       runtime.roomHeight = runtime.chaseRoom ? 8.2 : Math.max(4.7, 7 - runtime.tier * 0.24 + rand());
       runtime.layout=roomTypeFor(room,runtime.chaseRoom||runtime.haidIniActive||runtime.persHubActive||runtime.resonatorWorld||runtime.paradoxWorld||runtime.ascendedWorld||runtime.loreRoute.phase==='redox'||runtime.loreRoute.phase==='reveal');
+      if(blobMazeRoom(room,runtime.chaseState))runtime.layout='maze';
+      runtime.lift=restoreLift(restore?.lift);runtime.maze=null;
       runtime.inversionTime=restore?.inversionTime??0;runtime.inversionMercyUsed=restore?.inversionMercyUsed??false;
       if(runtime.layout!=="standard"){
         runtime.roomName+=` · ${ROOM_LABELS[runtime.layout]}`;
-        runtime.roomWidth=runtime.layout==='grand'?32:24;runtime.roomLength=runtime.layout==='grand'?48:runtime.layout==='maze'?52:44;
-        runtime.roomHeight=runtime.layout==='multifloor'?12:9;
+        runtime.roomWidth=runtime.layout==='grand'?32:24;runtime.roomLength=runtime.layout==='grand'?48:runtime.layout==='maze'?66:44;
+        runtime.roomHeight=runtime.layout==='multifloor'?12:runtime.layout==='maze'?3.8:9;
+        if(runtime.layout==='maze'){runtime.roomWidth=blobMazeRoom(room,runtime.chaseState)?54:42;runtime.roomLength=blobMazeRoom(room,runtime.chaseState)?90:66;runtime.maze=createMaze(runtime.roomWidth,runtime.roomLength,room);}
       }
       runtime.doorOpening = false; runtime.doorProgress = 0; runtime.mandatoryCrystal = MILESTONES[room] ?? null;
       runtime.mandatoryCollected = !runtime.mandatoryCrystal || runtime.discovered.has(runtime.mandatoryCrystal);
@@ -1621,9 +1643,11 @@ export default function IonGame() {
       runtime.noiseActive = !runtime.paradoxWorld && !runtime.persHubActive && !runtime.haidIniActive && room < 200 && (runtime.banishedUntil.noise ?? 0) < room && (runtime.chaseRoom || room > 10 && rand() < 0.12);
       if(restore?.noiseActive !== undefined)runtime.noiseActive=restore.noiseActive;
       if(runtime.layout==='inversion'){runtime.noiseActive=false;runtime.requiredResonators=3;}
+      if(runtime.layout==='drownedlift'){runtime.noiseActive=false;runtime.requiredResonators=0;}
       runtime.noiseCount = 0; runtime.noiseTime = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).noiseSeconds : 42;
       if(runtime.layout!=="standard")runtime.noiseTime*=runtime.layout==="maze"?3:2;
       runtime.noiseTime *= (runtime.boons.includes("calm")?1.35:1)*(runtime.boons.includes("impatience")?.7:1);
+      if(runtime.maze)runtime.noiseTime=Math.max(runtime.noiseTime,runtime.maze.route.length*runtime.maze.cell/2.6+75);
       runtime.noisePulseTimer = 1;
       runtime.activeResonators = 0;
       runtime.doorUnlocked = room === 1 || room === 200 || (runtime.requiredResonators === 0 && runtime.mandatoryCollected);
@@ -1632,11 +1656,12 @@ export default function IonGame() {
       runtime.paradoxBlobRoom=restore?.paradoxBlobRoom??(paradoxThreat==="blob");
       const grinRoll = runtime.paradoxWorld ? paradoxThreat==="grin" : !runtime.chaseRoom && !runtime.haidIniActive && !runtime.persHubActive && room < 200
         && (runtime.banishedUntil.entity ?? 0) < room && Math.random() < 0.07;
-      const grinActive=runtime.layout!=="inversion" && (restore?.grinIncoming ?? grinRoll);
+      const grinActive=runtime.layout!=="drownedlift" && runtime.layout!=="inversion" && (restore?.grinIncoming ?? grinRoll);
       runtime.grinRoom = grinActive ? room : -1; runtime.grinTargetRoom = runtime.grinRoom;
       runtime.grinIncoming = grinActive; runtime.grinWarningTimer = restore?.grinWarningTimer ?? (grinActive ? 10 : 0); runtime.grinTeleportTimer = 0;
       const chaseStage = runtime.chaseState ? room - runtime.chaseState.start + 1 : 0;
       runtime.spawnGrace = chaseStage === 5 ? 2 : runtime.chaseRoom ? 0.65 : 2.2;
+      if(blobMazeRoom(room,runtime.chaseState))runtime.spawnGrace=10;
       runtime.roomSpawnTimer = 0.12; runtime.roomEntitySpawned = true; // Warning completion arms the single spawn.
       runtime.verticalVelocity = 0; runtime.grounded = true; runtime.cameraMode = false; runtime.player.set(0, 1.65, runtime.roomLength / 2 - 3.4); runtime.yaw = 0; runtime.pitch = 0;
       const cave = /Caves|Caverns|Tunnels|Nursery|Gallery/.test(runtime.roomName);
@@ -1790,7 +1815,7 @@ export default function IonGame() {
       addNoiseEncounter();
       if (chase) {
         runtime.pickups.filter(p=>p.mandatory).forEach(p=>p.object.position.set(0,.7,runtime.roomLength/2-5));
-        buildChaseCourse(rand);
+        if(runtime.layout!=='maze')buildChaseCourse(rand);
         if (runtime.chaseState?.type === "remetons" && room === runtime.chaseState.start) beginInfection();
         else if ((runtime.banishedUntil[runtime.chaseState?.type === "remetons" ? "remetons" : "blob"] ?? 0) < room) addBlobChase();
         runtime.doorUnlocked = false;
@@ -1801,7 +1826,7 @@ export default function IonGame() {
         addEnemy("blob",rand);const questBlob=runtime.enemies[runtime.enemies.length-1];questBlob.speed=4.8;questBlob.object.position.set(0,0,-runtime.roomLength/2+5);
       }
       if(runtime.paradoxWorld && restore?.paradoxGrinAlive){addEnemy("entity",rand);runtime.paradoxGrinEncountered=true;runtime.grinIncoming=false;runtime.roomEntitySpawned=true;}
-      const canSpawn = (kind: EnemyKind) => runtime.layout!=="inversion" && !runtime.paradoxWorld && !runtime.persHubActive && (runtime.banishedUntil[kind] ?? 0) < room;
+      const canSpawn = (kind: EnemyKind) => runtime.layout!=="drownedlift" && runtime.layout!=="inversion" && !runtime.paradoxWorld && !runtime.persHubActive && (runtime.banishedUntil[kind] ?? 0) < room;
       if (room > 14 && !chase && !runtime.haidIniActive && canSpawn("sound") && rand() < 0.16 + runtime.tier * 0.05) addEnemy("sound", rand);
       if (room > 32 && !chase && !runtime.haidIniActive && canSpawn("prism") && rand() < 0.14 + runtime.tier * 0.035) addEnemy("prism", rand);
       if (room > 48 && !chase && !runtime.haidIniActive && canSpawn("mimic") && rand() < 0.13 + runtime.tier * 0.025) addEnemy("mimic", rand);
@@ -1894,16 +1919,28 @@ export default function IonGame() {
       // Preserve flooded walkways and the Door 300 arena's lethal open void.
       if(!runtime.resonatorWorld){
         const clear=[runtime.player,...runtime.pickups.map(p=>p.object.position),...runtime.stations.map(s=>s.object.position),...runtime.hazards.map(h=>h.object.position)];
-        if(runtime.layout!=='flooded'){
+        if(runtime.layout!=='flooded'&&runtime.layout!=='drownedlift'){
           addRockyCaveFloor(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,clear);
           runtime.roomGroup.children.filter(o=>o.userData.facilityFloor).forEach(o=>{o.visible=false;});
         }
         addCaveScenery(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.roomHeight,runtime.layout,room,clear);
-        if(cave&&runtime.layout!=='flooded')addMineralScatter(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,CRYSTALS[formationKey].color,mineralClear,(position,remove)=>{
+        if(cave&&!runtime.maze&&runtime.layout!=='flooded'&&runtime.layout!=='drownedlift')addMineralScatter(runtime.roomGroup,runtime.roomWidth,runtime.roomLength,runtime.layout,room,CRYSTALS[formationKey].color,mineralClear,(position,remove)=>{
           const anchor=new THREE.Group();anchor.name='mineable-scattered-crystal';anchor.position.copy(position);
           registerMineral(anchor,formationKey,remove);
         });
       }
+      if(runtime.maze){
+        const maze=runtime.maze;
+        if(restore){const p=mazePoint(maze,mazeCell(maze,runtime.player.x,runtime.player.z));runtime.player.set(p.x,1.65,p.z);}
+        const routeTasks=[...runtime.stations.filter(v=>v.kind==='resonator').map(v=>v.object),...runtime.pickups.filter(v=>v.kind==='specimen'||v.mandatory).map(v=>v.object)];
+        // Interleave timed objectives along the solution, leaving dead ends for optional loot.
+        routeTasks.sort((a,b)=>b.position.z-a.position.z);
+        routeTasks.forEach((o,i)=>{const p=mazePoint(maze,maze.route[Math.min(maze.route.length-2,Math.max(1,Math.floor((i+1)*maze.route.length/(routeTasks.length+1))))]);o.position.x=p.x;o.position.z=p.z;});
+        const tasks=new Set(routeTasks);
+        [...runtime.pickups.map(v=>v.object),...runtime.stations.map(v=>v.object)].filter(o=>!tasks.has(o)).forEach(o=>{const p=mazePoint(maze,mazeCell(maze,o.position.x,o.position.z));o.position.x=p.x;o.position.z=p.z;});
+        runtime.enemies.forEach(e=>{if(e.kind==='blob'&&runtime.chaseRoom){const p=mazePoint(maze,maze.route[0]);e.object.position.set(p.x,0,p.z+2);}else{const p=mazePoint(maze,mazeCell(maze,e.object.position.x,e.object.position.z));e.object.position.set(p.x,0,p.z);}});
+      }
+      refreshObjective();
       if(runtime.layout!=='standard'&&runtime.layout!=='inversion')badge('secret',`layout-${runtime.layout}`);
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
       if(!restore && activeSlotRef.current !== null) saveRun(false);
@@ -1967,7 +2004,7 @@ export default function IonGame() {
       updateHud(true);
     }
     function snapshot(): SaveData {
-      return { pickaxeLevel:runtime.pickaxeLevel,miningProgress:Object.fromEntries([...runtime.pickups.map(p=>[`p${p.object.userData.pickupId}`,p.object.userData.mineHits??0]),...runtime.stations.map((v,i)=>[`s${i}`,v.object.userData.mineHits??0])]), inversionTime: runtime.inversionTime, inversionMercyUsed:runtime.inversionMercyUsed, chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
+      return { lift:{...runtime.lift}, pickaxeLevel:runtime.pickaxeLevel,miningProgress:Object.fromEntries([...runtime.pickups.map(p=>[`p${p.object.userData.pickupId}`,p.object.userData.mineHits??0]),...runtime.stations.map((v,i)=>[`s${i}`,v.object.userData.mineHits??0])]), inversionTime: runtime.inversionTime, inversionMercyUsed:runtime.inversionMercyUsed, chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
         discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion, lightInfusion: runtime.lightInfusion,
         loreRoute:{...runtime.loreRoute},encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,boonieMet:runtime.boonieMet,accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
         wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil },
@@ -2342,6 +2379,12 @@ export default function IonGame() {
       else notify(`NOISE SPECIMEN ${runtime.noiseCount}/5`);
     }
     function refreshObjective() {
+      if(runtime.layout==='drownedlift'){
+        runtime.doorUnlocked=false;runtime.doorOpening=false;
+        const count=[1,2,4].filter(bit=>runtime.lift.power&bit).length;
+        runtime.objective=runtime.lift.started?`DROWNED LIFT · BOARD FAR PLATFORM · WATER ${Math.ceil(75-runtime.lift.elapsed)}s`:`DROWNED LIFT · REPAIR RELAYS ${count}/3 · START ENTRY CONSOLE`;
+        updateDoorIndicator();return;
+      }
       if(runtime.resonatorWorld){runtime.doorUnlocked=runtime.noiseCount>=5;runtime.objective=runtime.doorUnlocked?"RESONATOR · EXIT GATE OPEN":`RESONATOR · SPECIMENS ${runtime.noiseCount}/5 · SURVIVE THE CONVERGENCE`;if(runtime.doorUnlocked)runtime.doorOpening=true;updateDoorIndicator();return;}
       if(runtime.room===200){runtime.doorUnlocked=false;runtime.doorOpening=false;
         runtime.objective=runtime.paradoxWorld?"*200 · SURVIVE THE GRIN THEN ENTER THE RETURN RIFT":"Extraction signal acquired";
@@ -2417,6 +2460,20 @@ export default function IonGame() {
       buildRoom(Math.min(200,runtime.room+boonDoorStep(runtime.boons,runtime.chaseRoom)));
     }
     function openStation(kind: Station["kind"], station?: Station) {
+      if(kind==='liftPower'||kind==='liftConsole'){
+        if(voidBlocked())return;
+        if(!station||runtime.layout!=='drownedlift')return;
+        if(party.role==='guest'){party.send({type:'action',room:runtime.room,action:'lift',id:runtime.stations.indexOf(station)});return;}
+        if(kind==='liftPower'){
+          station.activated=true;runtime.lift.power|=1<<station.object.userData.relay;
+          station.object.traverse(o=>{if(o instanceof THREE.Mesh&&o.material instanceof THREE.MeshStandardMaterial)o.material.emissive.set(0x22ff99);});
+          notify('LIFT RELAY RESTORED');
+        }else if(runtime.lift.power!==7)notify('REPAIR ALL THREE LIFT RELAYS FIRST');
+        else if(!runtime.mandatoryCollected)notify('RECOVER THE REQUIRED MINERAL BEFORE LEAVING');
+        else if(!runtime.lift.started){runtime.lift.started=true;notify('PUMPS REVERSED · WATER RISING · BOARD THE LIFT AT THE FAR END');}
+        refreshObjective();updateHud(true);saveRun(false);return;
+      }
+
       if(kind==="lore"){offerLore();return;}
       if(kind==="voidoffering"){offerVoid();return;}
       if(kind==="voiddoor"){
@@ -2514,6 +2571,7 @@ export default function IonGame() {
           if(!runtime.paradoxWorld){escapeToHome();return;}
           notify("THE RETURN RIFT IS YOUR ONLY EXIT");return;
         }
+        if(runtime.layout==='drownedlift'){notify('THE LIFT IS THE EXIT · REPAIR POWER AND BOARD IT');return;}
         if (runtime.noiseActive || runtime.chaseRoom && !runtime.doorUnlocked) {notify("RESONANCE LOCK · COMPLETE SPECIMENS AND RESONATORS");return;}
         if (runtime.haidIniActive && runtime.activeResonators < 30) { runtime.audio?.pulse("error"); notify("HAID-INI LOCKDOWN · CRYSTAL KEYS REJECTED"); return; }
         if(runtime.layout==="inversion"&&!runtime.doorUnlocked){notify("BREAK ALL THREE ANCHORS · KEYS CANNOT RELEASE INVERSION");return;}
@@ -2674,7 +2732,7 @@ export default function IonGame() {
         if(!visible(station.object.position))return;
         const distance = station.object.position.clone().add(new THREE.Vector3(0,.85,0)).distanceTo(runtime.player);
         if (distance < bestDistance && !(station.activated && (station.kind === "resonator" || station.kind === "cabinet" || station.kind === "noiseCore"))) { bestDistance = distance; runtime.nearest = { kind: "station", index };
-          runtime.prompt = station.kind === "noiseCore" ? "NOISE · COLLECT THE OPEN CAPSULES" : station.kind === "lore" ? "E  OFFER VIAL OF SÁNG TO LORE" : station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
+          runtime.prompt = station.kind === "liftPower" ? station.activated ? "LIFT RELAY RESTORED" : "E  REPAIR LIFT POWER RELAY" : station.kind === "liftConsole" ? "E  START DROWNED LIFT · WATER WILL RISE" : station.kind === "noiseCore" ? "NOISE · COLLECT THE OPEN CAPSULES" : station.kind === "lore" ? "E  OFFER VIAL OF SÁNG TO LORE" : station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
             : station.kind === "trapdoor" ? runtime.chaseRoom ? "TRAPDOOR JAMMED · KEEP RUNNING" : runtime.haidIniActive ? runtime.hiding ? "E  EXIT · HAID-INI CAN ENTER" : "E  HIDE · UNSAFE FROM HAID-INI" : runtime.hiding ? "E  EXIT TRAPDOOR" : "E  HIDE IN TRAPDOOR"
             : station.kind === "resonator" ? runtime.layout==='inversion'&&!station.activated ? "E / CLICK · PICKAXE · BREAK ANCHOR" : station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  EXTRACT · RESONATION SHIELD REQUIRED" : "E / CLICK · PICKAXE · MINE RESONATOR"
             : `E  USE ${station.kind.replace("infusionsmith", "INFUSIONSMITH").toUpperCase()}`; }
@@ -2704,6 +2762,7 @@ export default function IonGame() {
         return;
       }
       if(runtime.boons.includes("tremor"))runtime.yaw+=Math.sin(performance.now()*.003)*dt*.18;
+      if(runtime.layout==='drownedlift'&&runtime.lift.ride>0){runtime.player.x=0;runtime.player.z=-runtime.roomLength/2+6;runtime.keysDown.clear();runtime.touchMove.x=0;runtime.touchMove.y=0;}
       const inversion=runtime.layout==='inversion'?-1:1;
       const forwardInput = inversion*((runtime.keysDown.has("KeyW") ? 1 : 0) - (runtime.keysDown.has("KeyS") ? 1 : 0) - runtime.touchMove.y);
       const sideInput = inversion*((runtime.keysDown.has("KeyD") ? 1 : 0) - (runtime.keysDown.has("KeyA") ? 1 : 0) + runtime.touchMove.x);
@@ -2723,10 +2782,12 @@ export default function IonGame() {
         if(!supported)runtime.grounded=false;
         if(next.y<-8){kill("RESONATOR · LOST IN THE VOID","boonie");return;}
       }
-      const surface=roomFloor(runtime.layout,runtime.roomLength,next.z)+1.65;
+      const ridingLift=runtime.layout==='drownedlift'&&Math.abs(next.x)<2.35&&Math.abs(next.z+runtime.roomLength/2-6)<2.35;
+      const surface=roomFloor(runtime.layout,runtime.roomLength,next.z)+1.65+(ridingLift?runtime.lift.ride/8*3.5:0);
       if(!runtime.resonatorWorld&&runtime.grounded&&runtime.verticalVelocity<=0&&Math.abs(next.y-surface)<.6)next.y=surface;
       if (!runtime.resonatorWorld && next.y <= surface) { next.y = surface; runtime.verticalVelocity = 0; runtime.grounded = true; }
       if(!runtime.resonatorWorld&&next.y>surface+.1)runtime.grounded=false;
+      if(runtime.maze&&next.y>runtime.roomHeight-.3){next.y=runtime.roomHeight-.3;runtime.verticalVelocity=Math.min(0,runtime.verticalVelocity);}
       next.x = THREE.MathUtils.clamp(next.x, -runtime.roomWidth / 2 + 0.72, runtime.roomWidth / 2 - 0.72);
       const minZ = runtime.doorProgress > 0.82 && Math.abs(next.x) < 2.0 ? -runtime.roomLength / 2 - 1.6 : -runtime.roomLength / 2 + 0.72;
       next.z = THREE.MathUtils.clamp(next.z, minZ, runtime.roomLength / 2 - 0.72);
@@ -2802,13 +2863,20 @@ export default function IonGame() {
           movementTarget.y = 0; movementSpeed = hunting ? enemy.speed : 1.25 + runtime.tier * 0.13;
         }
         shouldMove=shouldMove && enemy.stunTimer<=0 && party.role!=="guest";
-        if(runtime.layout==='maze'){
-          const targetZ=enemy.object.position.z+movementTarget.z;
-          const barriers=mazeBarriers(runtime.roomWidth,runtime.roomLength).filter(b=>(b.z-enemy.object.position.z)*(b.z-targetZ)<0).sort((a,b)=>Math.abs(a.z-enemy.object.position.z)-Math.abs(b.z-enemy.object.position.z));
-          if(barriers.length&&Math.abs(enemy.object.position.x-barriers[0].gapX)>1.8)movementTarget=new THREE.Vector3(barriers[0].gapX-enemy.object.position.x,0,barriers[0].z+(enemy.object.position.z>barriers[0].z?1.4:-1.4)-enemy.object.position.z);
+        if(runtime.maze){
+          const maze=runtime.maze,from=mazeCell(maze,enemy.object.position.x,enemy.object.position.z),target=enemy.object.position.clone().add(movementTarget),to=mazeCell(maze,target.x,target.z);
+          const path=mazePath(maze,from,to);
+          if(path.length>1){
+            const centre=mazePoint(maze,from),next=mazePoint(maze,path[1]);
+            // Centre on the corridor before turning; never cut a corner through rock.
+            const p=Math.abs(next.x-centre.x)>.1&&Math.abs(enemy.object.position.z-centre.z)>.15||Math.abs(next.z-centre.z)>.1&&Math.abs(enemy.object.position.x-centre.x)>.15?centre:next;
+            movementTarget=new THREE.Vector3(p.x-enemy.object.position.x,0,p.z-enemy.object.position.z);
+          }
+          if(enemy.kind==='blob'&&runtime.chaseRoom)movementSpeed=currentSprintSpeed()*.66;
         }
         if (shouldMove && movementTarget.length() > 0.02) {
-          enemy.object.position.add(movementTarget.normalize().multiplyScalar(movementSpeed * dt));
+          const step=Math.min(movementTarget.length(),movementSpeed*dt);
+          enemy.object.position.add(movementTarget.normalize().multiplyScalar(step));
           const lookAt = enemy.kind === "entity" && movementTarget !== toPlayer ? enemy.wanderTarget : runtime.player;
           enemy.object.lookAt(lookAt.x, enemy.object.position.y, lookAt.z);
         }
@@ -2836,6 +2904,21 @@ export default function IonGame() {
       runtime.audio?.setEntity(main?.object.position ?? new THREE.Vector3(), mainDistance, Boolean(main));
     }
     function updateWorld(dt: number) {
+      if(runtime.layout==='drownedlift'){
+        animateFloodedScenery(runtime.roomGroup,performance.now()*.001);
+        if(runtime.lift.started&&party.role!=='guest'){
+          runtime.lift.elapsed=Math.min(75,runtime.lift.elapsed+dt);
+          const pad=new THREE.Vector3(0,0,-runtime.roomLength/2+6);
+          const onPad=Math.abs(runtime.player.x)<2.35&&Math.abs(runtime.player.z-pad.z)<2.35;
+          const remote=runtime.remotePose,teamAboard=party.role!=='host'||!remote||remote.dead||(remote.room===runtime.room&&Math.abs(remote.x)<2.35&&Math.abs(remote.z-pad.z)<2.35);
+          if(onPad&&teamAboard)runtime.lift.ride=Math.min(8,runtime.lift.ride+dt);
+          if(runtime.lift.ride>=8&&runtime.mandatoryCollected){advanceDimension();return;}
+          if(runtime.lift.elapsed>=75&&!onPad){kill('THE DROWNED LIFT · FLOODWATER REACHED YOUR AIR SUPPLY','noise');return;}
+          refreshObjective();
+        }
+        if(party.role==='guest')runtime.stations.filter(s=>s.kind==='liftPower').forEach(s=>{s.activated=!!(runtime.lift.power&(1<<s.object.userData.relay));});
+        drawLift(runtime.roomGroup,runtime.lift);
+      }
       if(runtime.layout==='flooded')animateFloodedScenery(runtime.roomGroup,performance.now()*.001);
       if(training)updateTraining(dt);
       if(runtime.layout==='inversion')updateInversion(dt);
@@ -2980,7 +3063,7 @@ export default function IonGame() {
         runtime.networkTimer+=dt;
         if(runtime.networkTimer>=.12){
           runtime.networkTimer=0;party.send({type:"pose",pose:localPose()});
-          if(party.role==="host")party.send({type:"world",room:runtime.room,noiseTime:runtime.noiseTime,grinIncoming:runtime.grinIncoming,grinWarningTimer:runtime.grinWarningTimer,doorOpening:runtime.doorOpening,
+          if(party.role==="host")party.send({type:"world",room:runtime.room,lift:runtime.layout==='drownedlift'?{...runtime.lift}:undefined,noiseTime:runtime.noiseTime,grinIncoming:runtime.grinIncoming,grinWarningTimer:runtime.grinWarningTimer,doorOpening:runtime.doorOpening,
             enemies:runtime.enemies.map(enemy=>({kind:enemy.kind,alive:enemy.alive,x:enemy.object.position.x,y:enemy.object.position.y,z:enemy.object.position.z}))});
         }
       }
@@ -3001,6 +3084,7 @@ export default function IonGame() {
         const target=origin.clone().addScaledVector(direction,distance);
         target.x=THREE.MathUtils.clamp(target.x,-runtime.roomWidth/2+.2,runtime.roomWidth/2-.2);
         target.z=THREE.MathUtils.clamp(target.z,-runtime.roomLength/2+.2,runtime.roomLength/2-.2);
+        if(runtime.maze)target.y=Math.min(target.y,runtime.roomHeight-.25);
         camera.position.copy(target);camera.lookAt(runtime.player.clone().add(new THREE.Vector3(0,0,-8).applyEuler(new THREE.Euler(runtime.pitch,runtime.yaw,0,'YXZ'))));runtime.gunModel.visible=false;camera.updateMatrixWorld(true);runtime.flashlight.position.copy(camera.worldToLocal(runtime.player.clone().add(new THREE.Vector3(.1,.05,-.25).applyAxisAngle(new THREE.Vector3(0,1,0),runtime.yaw))));
       }
       cinematic.render(); animationFrame = requestAnimationFrame(animate);

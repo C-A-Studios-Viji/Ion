@@ -56,3 +56,14 @@ test('oversized reliable payloads are dropped before queue allocation',async()=>
 test('invite generator preserves the deployed subpath and strips stale parameters',()=>{const token=api.randomInviteToken(),url=new URL(api.partyInviteUrl('https://example.test/Ion/?old=true#x',token));assert.equal(url.pathname,'/Ion/');assert.equal(url.hash,'');assert.equal(url.searchParams.get('old'),null);assert.equal(url.searchParams.get('join'),token);});
 test('out-of-order reliable snapshots and actions are buffered until their predecessors arrive',async()=>{const h=relayHarness(),p=await h.pair();try{let held;h.setDrop(f=>{if(f.payload.payload.message?.type==='room'&&f.payload.payload.message.state.room===25){held=f;return true;}return false;});const seen=[];p.guest.onMessage=m=>seen.push(m.state.room);p.host.send({type:'room',state:{room:25}});p.host.send({type:'room',state:{room:26}});await h.flush();assert.equal(seen.length,0);h.sockets[1].receive(held);assert.deepEqual(seen,[25,26]);}finally{p.close();}});
 test('server URL uses TLS and the public key without WebRTC dependencies',()=>{const fs=require('node:fs'),path=require('node:path');const source=fs.readFileSync(path.resolve(__dirname,'../app/multiplayer.ts'),'utf8'),pkg=require('../package.json');assert(!pkg.dependencies.peerjs);assert(!source.includes('RTCPeerConnection'));assert(!source.includes('stun:'));assert(!source.includes('turn:'));});
+
+
+test('lift relay requests and host flood progress survive the server transport',async()=>{
+ const h=relayHarness(),{host,guest,close}=await h.pair();try{
+  let request,state;host.onMessage=m=>request=m;guest.onMessage=m=>state=m;
+  guest.send({type:'action',room:19,action:'lift',id:5});await h.flush();assert.equal(request.action,'lift');assert.equal(request.id,5);
+  const world={type:'world',room:19,noiseTime:0,grinWarningTimer:0,grinIncoming:false,doorOpening:false,enemies:[],lift:{power:7,started:true,elapsed:25,ride:3}};
+  host.send(world);await h.flush();assert.equal(JSON.stringify(state.lift),JSON.stringify(world.lift));
+  for(const patch of [{power:8},{power:1.5},{elapsed:-1},{elapsed:76},{ride:9},{ride:NaN},{started:'yes'}])assert.equal(api.validPartyMessage({...world,lift:{...world.lift,...patch}}),false);
+ }finally{close();}
+});

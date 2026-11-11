@@ -1,3 +1,4 @@
+import type {LiftState} from "./drownedLift";
 import type { Appearance } from "./playerModel";
 import { MULTIPLAYER_RELAY } from "./multiplayerConfig";
 
@@ -7,8 +8,8 @@ export type PartyMessage =
   | { type:"hello"; state:unknown; pose:Pose }
   | { type:"pose"; pose:Pose }
   | { type:"room"; state:unknown }
-  | { type:"world"; room:number; noiseTime:number; grinIncoming:boolean; grinWarningTimer:number; doorOpening:boolean; enemies:{kind:string;alive:boolean;x:number;y:number;z:number}[] }
-  | { type:"action"; room:number; action:"pickup"|"resonator"|"door"|"fire"|"revive"|"pers"|"rift"|"essence"; id?:number; x?:number; y?:number; z?:number }
+  | { type:"world"; lift?:LiftState; room:number; noiseTime:number; grinIncoming:boolean; grinWarningTimer:number; doorOpening:boolean; enemies:{kind:string;alive:boolean;x:number;y:number;z:number}[] }
+  | { type:"action"; room:number; action:"lift"|"pickup"|"resonator"|"door"|"fire"|"revive"|"pers"|"rift"|"essence"; id?:number; x?:number; y?:number; z?:number }
   | { type:"request-room"; room:number }
   | { type:"dead"; room:number };
 
@@ -55,8 +56,8 @@ export function validPartyMessage(value:unknown):value is PartyMessage{
   case 'hello':return record(value.state)&&room(value.state.room)&&validPose(value.pose);
   case 'room':return record(value.state)&&room(value.state.room);
   case 'request-room':case 'dead':return room(value.room);
-  case 'action':return room(value.room)&&['pickup','resonator','door','fire','revive','pers','rift','essence'].includes(String(value.action))&&(value.id===undefined||(Number.isInteger(value.id)&&Number(value.id)>=0&&Number(value.id)<10000))&&['x','y','z'].every(k=>value[k]===undefined||bounded(value[k]));
-  case 'world':return room(value.room)&&bounded(value.noiseTime)&&bounded(value.grinWarningTimer)&&typeof value.grinIncoming==='boolean'&&typeof value.doorOpening==='boolean'&&Array.isArray(value.enemies)&&value.enemies.length<=100&&value.enemies.every(e=>record(e)&&typeof e.kind==='string'&&e.kind.length<=32&&typeof e.alive==='boolean'&&['x','y','z'].every(k=>bounded(e[k])));
+  case 'action':return room(value.room)&&['lift','pickup','resonator','door','fire','revive','pers','rift','essence'].includes(String(value.action))&&(value.id===undefined||(Number.isInteger(value.id)&&Number(value.id)>=0&&Number(value.id)<10000))&&['x','y','z'].every(k=>value[k]===undefined||bounded(value[k]));
+  case 'world':return (value.lift===undefined||(record(value.lift)&&Number.isInteger(value.lift.power)&&Number(value.lift.power)>=0&&Number(value.lift.power)<=7&&typeof value.lift.started==='boolean'&&bounded(value.lift.elapsed)&&Number(value.lift.elapsed)>=0&&Number(value.lift.elapsed)<=75&&bounded(value.lift.ride)&&Number(value.lift.ride)>=0&&Number(value.lift.ride)<=8))&&room(value.room)&&bounded(value.noiseTime)&&bounded(value.grinWarningTimer)&&typeof value.grinIncoming==='boolean'&&typeof value.doorOpening==='boolean'&&Array.isArray(value.enemies)&&value.enemies.length<=100&&value.enemies.every(e=>record(e)&&typeof e.kind==='string'&&e.kind.length<=32&&typeof e.alive==='boolean'&&['x','y','z'].every(k=>bounded(e[k])));
   default:return false;
  }
 }

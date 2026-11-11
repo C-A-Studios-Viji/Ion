@@ -1,10 +1,11 @@
-export const ROOM_TYPES = ['grand','duplex','multifloor','basement','maze','collapsed','flooded','observation','inversion'] as const;
+export const ROOM_TYPES = ['grand','duplex','multifloor','basement','maze','collapsed','flooded','observation','inversion','drownedlift'] as const;
 export type RoomType = 'standard' | typeof ROOM_TYPES[number];
-export const ROOM_LABELS: Record<RoomType,string> = {standard:'Normal Resonance Gallery',grand:'Grand Chamber',duplex:'Duplex',multifloor:'Multi-floor Facility',basement:'Basement',maze:'Crystal Maze',collapsed:'Collapsed Room',flooded:'Flooded Chamber',observation:'Observation Room',inversion:'INVERSION · RETREAT TO PROCEED'};
+export const ROOM_LABELS: Record<RoomType,string> = {standard:'Normal Resonance Gallery',grand:'Grand Chamber',duplex:'Duplex',multifloor:'Multi-floor Facility',basement:'Basement',maze:'Crystal Maze',collapsed:'Collapsed Room',flooded:'Flooded Chamber',observation:'Observation Room',drownedlift:'The Drowned Lift',inversion:'INVERSION · RETREAT TO PROCEED'};
 // One door number is one complete layout, including all its floors.
 export const ROOM_CYCLE:readonly RoomType[] = ['standard','basement','duplex','grand','maze','multifloor','inversion','collapsed','flooded','observation'];
 export function roomTypeFor(room:number,special=false):RoomType {
  if(special||room===200||room===32)return 'standard';
+ if(room%20===19)return 'drownedlift';
  return ROOM_CYCLE[((Math.max(1,Math.floor(room))-1)%ROOM_CYCLE.length)];
 }
 // Accessible terraces are joined by continuous ramps. Entry and exit remain at zero.
