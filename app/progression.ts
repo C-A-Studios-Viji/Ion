@@ -1,4 +1,4 @@
-import { ROOM_TYPES, ROOM_LABELS } from './roomTypes';
+import { BADGE_ROOM_TYPES as ROOM_TYPES, ROOM_LABELS } from './roomTypes';
 import { negativeBoons } from "./boons";
 export type BadgeEvent =
   | "room" | "crystal" | "encounter" | "escape" | "kill" | "death" | "craft"

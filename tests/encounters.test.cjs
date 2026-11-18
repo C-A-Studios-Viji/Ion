@@ -402,7 +402,7 @@ test('all room layouts are reachable, deterministic and respect special-room res
 });
 
 test('INVERSION reverses keys, seals anchors against keys, resumes and awards Ultra only on escape',async()=>{
- const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(17);const r=h.runtime;
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(7);const r=h.runtime;
  assert.equal(r.layout,'inversion');assert.equal(r.requiredResonators,3);assert.equal(r.noiseActive,false);
  const z=r.player.z;r.keysDown.add('KeyW');h.step(.3);r.keysDown.clear();assert(r.player.z>z);
  const z2=r.player.z;r.keysDown.add('KeyS');h.step(.3);r.keysDown.clear();assert(r.player.z<z2);
@@ -436,8 +436,8 @@ test('terraced floors support walking and INVERSION strikes respect cover',async
   for(let i=0;i<240;i++){h.step(.05);high=Math.max(high,r.player.y);low=Math.min(low,r.player.y);assert(Math.abs(r.player.y-1.65-types.roomFloor(type,r.roomLength,r.player.z))<.65);}
   r.keysDown.clear();assert(high-low>1.5);
  }
- h.enter(17);h.runtime.player.set(0,1.65,15);h.runtime.spawnGrace=0;h.runtime.inversionTime=13.95;h.runtime.inversionMercyUsed=true;h.step(.1);assert.equal(h.runtime.dead,true);
- h.enter(17);h.runtime.player.set(3,1.65,11);h.runtime.spawnGrace=0;h.runtime.inversionTime=13.95;h.step(.1);assert.equal(h.runtime.dead,false);
+ h.enter(7);h.runtime.player.set(0,1.65,15);h.runtime.spawnGrace=0;h.runtime.inversionTime=13.95;h.runtime.inversionMercyUsed=true;h.step(.1);assert.equal(h.runtime.dead,true);
+ h.enter(7);h.runtime.player.set(3,1.65,11);h.runtime.spawnGrace=0;h.runtime.inversionTime=13.95;h.step(.1);assert.equal(h.runtime.dead,false);
 });
 
 test('room geometry has a traversable route to the exit and each required objective',()=>{
@@ -691,15 +691,54 @@ test('entry rooms have floor-to-ceiling cave coverage in both modes and no solid
 });
 
 
-test('ordinary doors repeat the requested ten-layout cycle from the first door',()=>{
+test('ordinary doors repeat the expanded eighteen-layout cycle from the first door',()=>{
  const h=gameHarness(),types=h.load(path.join(root,'app/roomTypes.ts'));
- const expected=['standard','basement','duplex','grand','maze','multifloor','inversion','collapsed','flooded','observation'];
+ const expected=['standard','basement','duplex','grand','maze','multifloor','inversion','collapsed','flooded','observation','fungal','archive','refinery','pressure','mirror','greenhouse','faultline','dormitory'];
  for(let room=1;room<=80;room++){
-  assert.equal(types.roomTypeFor(room),room===32?'standard':room%20===19?'drownedlift':expected[(room-1)%10]);
+  assert.equal(types.roomTypeFor(room),room===32?'standard':room%20===19?'drownedlift':expected[(room-1)%expected.length]);
   if(room>1&&room!==32)assert.notEqual(types.roomTypeFor(room),types.roomTypeFor(room-1));
  }
  for(let room=1;room<=10;room++){h.enter(room);assert.equal(h.runtime.layout,expected[room-1]);}
  assert.equal(h.runtime.layout,'observation');
+});
+
+test('all eight new rooms generate three usable controls, reject key bypass, and unlock after completion',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();const types=h.load(path.join(root,'app/roomTypes.ts'));
+ const rooms=h.load(path.join(root,'app/experimentalRooms.ts'));
+ for(const type of rooms.EXPERIMENTAL_ROOMS){
+  const door=Array.from({length:18},(_,i)=>i+1).find(n=>types.roomTypeFor(n)===type);
+  h.enter(door);const r=h.runtime;r.enemies.forEach(e=>e.alive=false);r.grinIncoming=false;r.roomEntitySpawned=true;
+  assert.equal(r.layout,type);assert(r.roomGroup.getObjectByName('experimental-room'));
+  const nodes=r.stations.filter(s=>s.kind==='resonator');assert.equal(nodes.length,3);assert.equal(r.requiredResonators,3);
+  assert.equal(r.noiseActive,false);
+  r.nearest={kind:'door'};h.act.interact();assert.equal(r.doorUnlocked,false,`${type}: crystal keys must not bypass controls`);
+  r.mandatoryCollected=true;
+  for(const [i,node] of nodes.entries()){
+   assert.equal(node.object.userData.roomNode,i);
+   assert.equal(node.needsShield,false);
+   h.useAt(node.object);assert.equal(node.activated,true,`${type} control ${i+1} reachable`);
+  }
+  assert.equal(r.activeResonators,3);assert.equal(r.doorUnlocked,true,`${type} exit unlocks`);
+ }
+});
+
+test('pressure valves enforce sequence and restored room controls preserve progress',async()=>{
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.start(true);h.act.confirmBoons();h.enter(14);
+ const r=h.runtime;r.enemies.forEach(e=>e.alive=false);r.grinIncoming=false;r.roomEntitySpawned=true;
+ const nodes=r.stations.filter(s=>s.kind==='resonator');h.useAt(nodes[2].object);assert.equal(r.activeResonators,0);
+ h.useAt(nodes[0].object);assert.equal(r.activeResonators,1);const env=r.roomGroup.getObjectByName('experimental-room');env.userData.time=11;env.userData.noise=37;h.act.saveRun();h.act.loadSlot(0);h.act.confirmBoons();
+ assert.equal(r.roomGroup.getObjectByName('experimental-room').userData.time,11);assert.equal(r.roomGroup.getObjectByName('experimental-room').userData.noise,37);assert.equal(r.layout,'pressure');assert.equal(r.activeResonators,1);assert.equal(r.stations.filter(s=>s.kind==='resonator')[0].activated,true);
+});
+
+test('environment traversal changes with repaired controls and dormitory noise recovers',()=>{
+ const h=gameHarness(),rooms=h.load(path.join(root,'app/experimentalRooms.ts'));
+ const blocked=rooms.roomTraversal('archive',0,14,44,0,0),repaired=rooms.roomTraversal('archive',0,14,44,0,1);
+ assert(blocked.slow<repaired.slow);
+ assert(rooms.roomTraversal('refinery',0,14,44,0,0).push>0);
+ assert(rooms.roomTraversal('refinery',0,14,44,0,1).push<0);
+ const g=new THREE.Group();const env=rooms.addExperimentalRoom(g,'dormitory',24,44,9);
+ rooms.animateExperimentalRoom(g,'dormitory',3,0,true,true);assert(env.userData.noise>55);
+ rooms.animateExperimentalRoom(g,'dormitory',5,0,false,false);assert.equal(env.userData.noise,0);
 });
 
 test('bedrock texture coordinates wrap continuously from the floor up both walls onto the ceiling',()=>{
@@ -764,7 +803,7 @@ test('open Noise capsules need no sacrifice and the last ten seconds reveal only
 });
 
 test('INVERSION gives one saved mercy, single-hit anchors and three seconds before a slower pursuit',async()=>{
- const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(17);const r=h.runtime;
+ const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(7);const r=h.runtime;
  r.player.set(0,1.65,15);r.spawnGrace=0;r.inversionTime=8.95;h.step(.1);assert(r.inversionLight.intensity>=60);assert.equal(r.dead,false);
  r.inversionTime=13.95;h.step(.1);assert.equal(r.dead,false);assert.equal(r.inversionMercyUsed,true);
  h.act.saveRun();h.act.loadSlot(0);h.act.confirmBoons();assert.equal(r.inversionMercyUsed,true);
