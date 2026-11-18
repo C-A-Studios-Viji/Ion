@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import type {RoomType} from './roomTypes';
+import {FINALE_ROOMS,type RoomType} from './roomTypes';
 
-export const EXPERIMENTAL_ROOMS = ['fungal','archive','refinery','pressure','mirror','greenhouse','faultline','dormitory'] as const;
+export const EXPERIMENTAL_ROOMS = ['fungal','archive','refinery','pressure','mirror','greenhouse','faultline','dormitory',...FINALE_ROOMS] as const;
 export type ExperimentalRoom = typeof EXPERIMENTAL_ROOMS[number];
 export const isExperimentalRoom = (type:RoomType):type is ExperimentalRoom => (EXPERIMENTAL_ROOMS as readonly string[]).includes(type);
 export const ROOM_TASKS:Record<ExperimentalRoom,string> = {
@@ -12,6 +12,9 @@ export const ROOM_TASKS:Record<ExperimentalRoom,string> = {
  mirror:'DRAIN THREE BASINS · FOLLOW THE CYAN REFLECTIONS, AVOID RED',
  greenhouse:'CUT THREE ROOT NODES · NEW ROOTS GROW IN THE NEXT BED',
  faultline:'STABILIZE THREE FAULTS · AMBER BRIDGES ARE ABOUT TO DROP',
+ powerexchange:'LIGHT THREE EMERGENCY BEACONS · OPENING THE EXIT CUTS MAIN POWER',
+ carousel:'ROTATE THREE BULKHEADS IN ORDER · FOLLOW EACH OPEN SIDE',
+ crystallung:'STABILIZE THREE CRYSTAL VALVES · CROSS WHEN THE RIBS OPEN',
  dormitory:'SEARCH THREE BUNK LOCKERS · WALK AND LET THE NOISE FALL',
 };
 // Traversal effects use normalized room coordinates, so every variant scales
@@ -81,6 +84,31 @@ export function addExperimentalRoom(group:THREE.Group,type:ExperimentalRoom,widt
    for(const x of [-width/2+1.5,width/2-1.5])box(2,.12,8,x,.03,z,cyan);
    for(let j=0;j<8;j++){const crack=box(.12,.02,2,(j-3.5)*1.2,.16,z,amber);crack.rotation.y=(j%2?1:-1)*.5;crack.userData.faultGlow=i;}
   }
+  if(type==='powerexchange'){
+   const cable=box(.16,.08,9,side*3,.12,z,steel);
+   cable.rotation.y=side*.65;
+   for(let j=0;j<5;j++){
+    const light=box(.35,.08,.5,side*6*(1-j/4),.16,z-j*1.7,cyan);
+    light.userData.beacon=i;
+   }
+   const lamp=new THREE.PointLight(0xff9e4a,9,7);
+   lamp.position.set(side*4,1.2,z);lamp.userData.emergency=true;lamp.userData.beacon=i;
+   root.add(lamp);
+  }
+  if(type==='carousel'){
+   const panelWidth=width-7;
+   const wall=solid(box(panelWidth,3.5,.65,-side*3.5,1.75,z));
+   wall.userData.carousel=i;wall.userData.initialX=wall.position.x;wall.userData.initialZ=z;
+   const indicator=box(width-1,.1,.7,0,3.8,z,amber);
+   indicator.name='bulkhead-rotation-track';
+  }
+  if(type==='crystallung'){
+   for(const side of [-1,1]){
+    const rib=solid(box(4,3.5,1.5,side*6,1.75,z,violet));
+    rib.userData.lungBand=i;rib.userData.side=side;
+    mesh(new THREE.TorusGeometry(1.3,.16,8,16),amber,side*6,4.1,z);
+   }
+  }
   if(type==='dormitory')for(const x of [-width/2+2,width/2-2]){
    for(const y of [.55,2.15]){solid(box(3,.5,5,x,y+.1,z));box(2.7,.3,4.5,x,y+.25,z,violet);box(2,.2,.8,x,y+.45,z+1.6,steel);}
    for(const xx of [x-1.4,x+1.4])box(.12,3,.12,xx,1.5,z+2.4);
@@ -90,7 +118,7 @@ export function addExperimentalRoom(group:THREE.Group,type:ExperimentalRoom,widt
  group.add(root);return root;
 }
 
-export function animateExperimentalRoom(group:THREE.Group,type:ExperimentalRoom,dt:number,cleared:number,moving:boolean,sprinting:boolean){
+export function animateExperimentalRoom(group:THREE.Group,type:ExperimentalRoom,dt:number,cleared:number,moving:boolean,sprinting:boolean,blackout=false,player?:THREE.Vector3){
  const root=group.getObjectByName('experimental-room');if(!root)return;
  root.userData.time+=dt;
  if(type==='dormitory')root.userData.noise=THREE.MathUtils.clamp((root.userData.noise??0)+dt*(moving?(sprinting?24:2):-18),0,100);
@@ -103,7 +131,26 @@ export function animateExperimentalRoom(group:THREE.Group,type:ExperimentalRoom,
   if(o.userData.steam!==undefined)o.visible=cleared<=o.userData.steam;
   if(o.userData.rootNode!==undefined)o.scale.y=cleared>o.userData.rootNode ? .08 : 1+(cleared===o.userData.rootNode ? .35 : 0);
   if(o.userData.basin!==undefined)o.visible=cleared<=o.userData.basin;
-  if(o.userData.bounds){o.updateMatrixWorld(true);o.userData.bounds.setFromObject(o);}
+  if(o.userData.beacon!==undefined)o.visible=cleared>o.userData.beacon;
+  if(o.userData.carousel!==undefined){
+   const engaged=cleared>o.userData.carousel;
+   const target=engaged?Math.PI:0;
+   const angle=dt===0?target:Math.min(target,(o.userData.angle??0)+dt*Math.PI*1.5);
+   o.userData.angle=angle;
+   o.position.x=o.userData.initialX*Math.cos(angle);
+   o.position.z=o.userData.initialZ+o.userData.initialX*Math.sin(angle);
+   o.rotation.y=-angle;
+  }
+  if(o.userData.lungBand!==undefined){
+   const phase=(time+o.userData.lungBand*2)%8;
+   const reach=cleared>o.userData.lungBand?0:(1-Math.cos(phase*Math.PI/4))/2;
+   const target=o.userData.side*(6-4.1*reach);
+   // Hold a growing rib if the player is in its sweep. The side aisles stay open.
+   if(!player || Math.abs(o.position.z-player.z)>1.15 || Math.abs(target-player.x)>2.4 ||
+      Math.abs(target-player.x)>Math.abs(o.position.x-player.x))o.position.x=target;
+  }
+  if(o.userData.bounds){o.updateWorldMatrix(true,false);o.userData.bounds.setFromObject(o);}
+  if(o instanceof THREE.PointLight&&o.userData.emergency)o.intensity=blackout?12:3;
   if(o.userData.fault!==undefined)o.position.y=cleared<=o.userData.fault&&(time+o.userData.fault*3)%10>6?-.5:.05;
  });
 }

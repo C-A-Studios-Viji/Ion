@@ -22,7 +22,7 @@ import { emptyLoreRoute, LORE_NIGHTMARES, serpAdvice, type LoreRoute } from "./l
 import { emptyEntityEvents, createMemoryTrial, payVoid, type EntityEvents } from "./entityEvents";
 import {createMaze,mazePoint,mazeCell,mazePath,blobMazeRoom,type Maze} from './maze';
 import {freshLift,restoreLift,addDrownedLift,drawLift,type LiftState} from './drownedLift';
-import { roomTypeFor, roomFloor, ROOM_LABELS, type RoomType } from './roomTypes';
+import { roomTypeFor, roomFloor, ROOM_LABELS, FINALE_ROOMS, type RoomType } from './roomTypes';
 import {TUTORIAL_STEPS,PRACTICE_STEPS} from './fieldGuide';
 import {updateNoiseAssist} from './noiseAssist';
 import {animateFloodedScenery} from './floodedScenery';
@@ -178,10 +178,6 @@ type Runtime = {
   layout: RoomType;
   lift: LiftState;
   maze: Maze | null;
-  inversionTime: number;
-  inversionMercyUsed:boolean;
-  inversionActor: THREE.Group | null;
-  inversionLight: THREE.PointLight | null;
   platforms: THREE.Box3[];
   fireballs: THREE.Mesh[];
   fireballTimer: number;
@@ -313,10 +309,10 @@ type Runtime = {
 type SaveData = {
   pickaxeLevel?:number;
   miningProgress?:Record<string,number>;
+  layout?: RoomType;
   environment?: {time:number;noise:number};
+  powerExitOpened?: boolean;
   lift?: LiftState;
-  inversionTime?: number;
-  inversionMercyUsed?:boolean;
   loreRoute?:LoreRoute;
   encounters?: EntityEvents;
   boons?: BoonId[];
@@ -540,7 +536,7 @@ const TIERS = [
   "RESONANCE",
   "FRACTURE",
   "BLACKOUT",
-  "INVERSION",
+  "DISTORTION",
   "BREACH",
   "COLLAPSE",
   "ION",
@@ -843,7 +839,7 @@ export default function IonGame() {
     const runtime: Runtime = {
       chaseState: null, noiseActive: false, noiseCount: 0, noiseTime: 0, noisePulseTimer: 0,
       infectionTime: -1, infectionActors: null, deathKind: "entity", scareActor: null, scareTime: 0,
-      layout: "standard", lift:freshLift(),maze:null, inversionTime: 0, inversionMercyUsed:false, inversionActor: null, inversionLight: null,
+      layout: "standard", lift:freshLift(),maze:null,
       pickaxeLevel:0,mineSwing:0,thirdPerson:false,localAvatar,pickaxeModel,appearance, renderer, scene, camera, roomGroup, roomWidth: 17, roomLength: 25, roomHeight: 6,
       room: 1, roomName: "Intake Corridor", tier: 0, player: new THREE.Vector3(0, 1.65, 8),
       verticalVelocity: 0, grounded: true,
@@ -1292,7 +1288,6 @@ export default function IonGame() {
       runtime.roomGroup.visible = true; runtime.infectionTime = -1; runtime.infectionActors = null;
       disposeModel(runtime.roomGroup);
       runtime.roomGroup.clear();
-      runtime.inversionActor=null;runtime.inversionLight=null;runtime.inversionTime=0;
       runtime.platforms=[];runtime.fireballs=[];runtime.fireballTimer=0;
       runtime.pickups = []; runtime.stations = []; runtime.enemies = []; runtime.hazards = []; runtime.obstacles = [];
       runtime.flickerLights = []; runtime.hiddenObjects = []; runtime.door = null; runtime.doorPanels = [];
@@ -1557,9 +1552,13 @@ export default function IonGame() {
         runtime.stations.filter(s=>s.kind==='resonator').forEach((station,i)=>{
           station.needsShield=false;
           station.object.userData.roomNode=i;
-          station.object.position.set(i%2?8:-8,0,runtime.roomLength/2-8-i*10);
+          const side=i%2?1:-1;
+          station.object.position.set(side*8,0,runtime.roomLength/2-(runtime.layout==='carousel'?6:8)-i*10);
         });
         refreshObjective();
+      }
+      if(isExperimentalRoom(runtime.layout)){
+        animateExperimentalRoom(runtime.roomGroup,runtime.layout,0,runtime.activeResonators,false,false);
       }
       if(runtime.layout==='drownedlift'){
         addDrownedLift(runtime.roomGroup,runtime.roomLength);
@@ -1569,38 +1568,6 @@ export default function IonGame() {
         }
         const console=createStation('resonator',0x44ffaa);console.position.set(0,0,runtime.roomLength/2-7);runtime.roomGroup.add(console);runtime.stations.push({kind:'liftConsole',object:console});
         drawLift(runtime.roomGroup,runtime.lift);
-      }
-      if(runtime.layout==='inversion'){
-        runtime.stations.filter(s=>s.kind==='resonator').forEach((s,i)=>{s.needsShield=false;s.object.position.set(i===1?5:-5,0,(i-1)*9);});
-        runtime.inversionActor=createPersModel();runtime.inversionActor.rotation.z=Math.PI;runtime.inversionActor.position.set(0,runtime.roomHeight-1,0);runtime.roomGroup.add(runtime.inversionActor);
-        runtime.inversionLight=new THREE.PointLight(0xb54aff,0,30);runtime.inversionLight.position.set(0,4,0);runtime.roomGroup.add(runtime.inversionLight);
-        if(runtime.doorPers)runtime.doorPers.visible=false;
-        notify('INVERSION · S FORWARD · SINGLE-HIT ANCHORS · FIVE-SECOND PURPLE WARNING · ONE MERCY');
-      }
-    }
-    function updateInversion(dt:number){
-      const actor=runtime.inversionActor;if(!actor)return;
-      const before=Math.floor(runtime.inversionTime/14);runtime.inversionTime+=dt;
-      const cycle=runtime.inversionTime%14;
-      const released=runtime.activeResonators>=3;
-      if(runtime.inversionLight)runtime.inversionLight.intensity=!released&&cycle>=9?65:2;
-      if(!released){
-        actor.position.set(Math.sin(runtime.inversionTime*.3)*2,runtime.roomHeight-1,0);
-        if(cycle>=9&&cycle-dt<9)notify('PERS · PURPLE STRIKE · GET BEHIND A CABINET');
-        if(Math.floor(runtime.inversionTime/14)>before&&!runtime.hiding){
-          const source=new THREE.Vector3(actor.position.x,1.2,actor.position.z),target=runtime.player.clone();target.y=1.2;
-          const ray=new THREE.Ray(source,target.clone().sub(source).normalize());
-          const covered=runtime.obstacles.some(box=>{const hit=ray.intersectBox(box,new THREE.Vector3());return hit&&hit.distanceTo(source)<target.distanceTo(source);});
-          if(!covered){
-            if(!runtime.inversionMercyUsed){runtime.inversionMercyUsed=true;runtime.spawnGrace=5;notify('PERS SPARED YOU ONCE · GET BEHIND A CABINET AT PURPLE LIGHT');}
-            else kill('INVERTED PERS · TAKE COVER WHEN THE LIGHT TURNS PURPLE','remetons');
-          }
-        }
-      }else{
-        if(actor.userData.releaseAt===undefined){actor.userData.releaseAt=runtime.inversionTime+3;notify('THREE ANCHORS BROKEN · THREE-SECOND HEAD START · RUN TO THE EXIT');}
-        if(runtime.inversionTime<actor.userData.releaseAt)return;
-        actor.rotation.z=0;actor.position.y=Math.max(0,actor.position.y-dt*6);
-        if(actor.position.y===0){const direction=runtime.player.clone().sub(actor.position);direction.y=0;actor.position.addScaledVector(direction.normalize(),currentSprintSpeed()*.55*dt);actor.lookAt(runtime.player.x,0,runtime.player.z);if(actor.position.distanceTo(runtime.player)<2)kill('INVERTED PERS CAUGHT YOU AT THE EXIT','remetons');}
       }
     }
     function buildRoom(room: number, restore?: SaveData) {
@@ -1653,8 +1620,11 @@ export default function IonGame() {
       runtime.roomHeight = runtime.chaseRoom ? 8.2 : Math.max(4.7, 7 - runtime.tier * 0.24 + rand());
       runtime.layout=roomTypeFor(room,runtime.chaseRoom||runtime.haidIniActive||runtime.persHubActive||runtime.resonatorWorld||runtime.paradoxWorld||runtime.ascendedWorld||runtime.loreRoute.phase==='redox'||runtime.loreRoute.phase==='reveal');
       if(blobMazeRoom(room,runtime.chaseState))runtime.layout='maze';
+      // Old saves on this slot contain positions and controls from INVERSION.
+      if(restore && FINALE_ROOMS.some(type=>type===runtime.layout) && restore.layout!==runtime.layout){
+        restore={...restore,playerPosition:undefined,activatedResonators:[],miningProgress:{},environment:undefined};
+      }
       runtime.lift=restoreLift(restore?.lift);runtime.maze=null;
-      runtime.inversionTime=restore?.inversionTime??0;runtime.inversionMercyUsed=restore?.inversionMercyUsed??false;
       if(runtime.layout!=="standard"){
         runtime.roomName+=` · ${ROOM_LABELS[runtime.layout]}`;
         runtime.roomWidth=runtime.layout==='grand'?32:24;runtime.roomLength=runtime.layout==='grand'?48:runtime.layout==='maze'?66:44;
@@ -1666,8 +1636,6 @@ export default function IonGame() {
       runtime.requiredResonators = runtime.chaseRoom ? 4 : runtime.haidIniActive ? 30 : !runtime.persHubActive && room > 2 && room % 4 === 0 ? Math.min(4, 2 + Math.floor(runtime.tier / 2)) : 0;
       runtime.noiseActive = !runtime.paradoxWorld && !runtime.persHubActive && !runtime.haidIniActive && room < 200 && (runtime.banishedUntil.noise ?? 0) < room && (runtime.chaseRoom || room > 10 && rand() < 0.12);
       if(restore?.noiseActive !== undefined)runtime.noiseActive=restore.noiseActive;
-      if(runtime.layout==='inversion'){runtime.noiseActive=false;runtime.requiredResonators=3;}
-      if(runtime.layout==='drownedlift'){runtime.noiseActive=false;runtime.requiredResonators=0;}
       if(isExperimentalRoom(runtime.layout)){runtime.noiseActive=false;runtime.requiredResonators=3;}
       runtime.noiseCount = 0; runtime.noiseTime = runtime.chaseState ? chaseRoomRules(room,runtime.chaseState).noiseSeconds : 42;
       if(runtime.layout!=="standard")runtime.noiseTime*=runtime.layout==="maze"?3:2;
@@ -1681,7 +1649,7 @@ export default function IonGame() {
       runtime.paradoxBlobRoom=restore?.paradoxBlobRoom??(paradoxThreat==="blob");
       const grinRoll = runtime.paradoxWorld ? paradoxThreat==="grin" : !runtime.chaseRoom && !runtime.haidIniActive && !runtime.persHubActive && room < 200
         && (runtime.banishedUntil.entity ?? 0) < room && Math.random() < 0.07;
-      const grinActive=runtime.layout!=="drownedlift" && runtime.layout!=="inversion" && (restore?.grinIncoming ?? grinRoll);
+      const grinActive=runtime.layout!=="drownedlift" && (restore?.grinIncoming ?? grinRoll);
       runtime.grinRoom = grinActive ? room : -1; runtime.grinTargetRoom = runtime.grinRoom;
       runtime.grinIncoming = grinActive; runtime.grinWarningTimer = restore?.grinWarningTimer ?? (grinActive ? 10 : 0); runtime.grinTeleportTimer = 0;
       const chaseStage = runtime.chaseState ? room - runtime.chaseState.start + 1 : 0;
@@ -1851,7 +1819,7 @@ export default function IonGame() {
         addEnemy("blob",rand);const questBlob=runtime.enemies[runtime.enemies.length-1];questBlob.speed=4.8;questBlob.object.position.set(0,0,-runtime.roomLength/2+5);
       }
       if(runtime.paradoxWorld && restore?.paradoxGrinAlive){addEnemy("entity",rand);runtime.paradoxGrinEncountered=true;runtime.grinIncoming=false;runtime.roomEntitySpawned=true;}
-      const canSpawn = (kind: EnemyKind) => runtime.layout!=="drownedlift" && runtime.layout!=="inversion" && !runtime.paradoxWorld && !runtime.persHubActive && (runtime.banishedUntil[kind] ?? 0) < room;
+      const canSpawn = (kind: EnemyKind) => runtime.layout!=="drownedlift" && !runtime.paradoxWorld && !runtime.persHubActive && (runtime.banishedUntil[kind] ?? 0) < room;
       if (room > 14 && !chase && !runtime.haidIniActive && canSpawn("sound") && rand() < 0.16 + runtime.tier * 0.05) addEnemy("sound", rand);
       if (room > 32 && !chase && !runtime.haidIniActive && canSpawn("prism") && rand() < 0.14 + runtime.tier * 0.035) addEnemy("prism", rand);
       if (room > 48 && !chase && !runtime.haidIniActive && canSpawn("mimic") && rand() < 0.13 + runtime.tier * 0.025) addEnemy("mimic", rand);
@@ -1919,6 +1887,7 @@ export default function IonGame() {
       }
       buildEntityEvents(restore);
       finishRoomLayout(Boolean(restore));
+      if(runtime.layout==='powerexchange' && restore?.powerExitOpened && runtime.doorUnlocked)runtime.doorOpening=true;
       const environment=runtime.roomGroup.getObjectByName('experimental-room');
       if(environment&&restore?.environment){environment.userData.time=Math.max(0,Number(restore.environment.time)||0);environment.userData.noise=THREE.MathUtils.clamp(Number(restore.environment.noise)||0,0,100);}
       // Decorative deposits use a separate stable ID range so old objective
@@ -1968,7 +1937,7 @@ export default function IonGame() {
         runtime.enemies.forEach(e=>{if(e.kind==='blob'&&runtime.chaseRoom){const p=mazePoint(maze,maze.route[0]);e.object.position.set(p.x,0,p.z+2);}else{const p=mazePoint(maze,mazeCell(maze,e.object.position.x,e.object.position.z));e.object.position.set(p.x,0,p.z);}});
       }
       refreshObjective();
-      if(runtime.layout!=='standard'&&runtime.layout!=='inversion')badge('secret',`layout-${runtime.layout}`);
+      if(runtime.layout!=='standard')badge('secret',`layout-${runtime.layout}`);
       if(runtime.loreRoute.phase==='reveal'){runtime.running=false;showScreen("lore");}
       if(!restore && activeSlotRef.current !== null) saveRun(false);
       if(partyRef.current?.role==="host" && partyRef.current.connection?.open)partyRef.current.send({type:"room",state:snapshot()});
@@ -2007,7 +1976,7 @@ export default function IonGame() {
     }
     function buildEntityEvents(restore?:SaveData){
       const events=runtime.encounters;
-      const eligible=runtime.layout!=="inversion"&&party.role!=="guest"&&!runtime.paradoxWorld&&!runtime.ascendedWorld&&!runtime.resonatorWorld&&!runtime.chaseRoom&&!runtime.haidIniActive&&!runtime.persHubActive&&runtime.room>=5&&runtime.room<170;
+      const eligible=party.role!=="guest"&&!runtime.paradoxWorld&&!runtime.ascendedWorld&&!runtime.resonatorWorld&&!runtime.chaseRoom&&!runtime.haidIniActive&&!runtime.persHubActive&&runtime.room>=5&&runtime.room<170;
       if(!restore&&eligible&&!events.voidSeen&&!events.voidDebt&&!events.memory&&Math.random()<.025){events.voidSeen=true;events.voidDebt={paid:0,doorsLeft:20,lastRoom:runtime.room};notify("VOID · 50 CRYSTALS · TWENTY DOORS TO PAY");}
       if(events.voidDebt){
         if(events.voidDebt.doorsLeft<=0){runtime.spawnGrace=0;runtime.wardCharges=0;runtime.basdinos=0;kill("VOID · TWENTY DOORS · DEBT UNPAID","void");return;}
@@ -2032,7 +2001,7 @@ export default function IonGame() {
     }
     function snapshot(): SaveData {
       const environment=runtime.roomGroup.getObjectByName('experimental-room');
-      return { environment:environment?{time:environment.userData.time,noise:environment.userData.noise}:undefined,lift:{...runtime.lift}, pickaxeLevel:runtime.pickaxeLevel,miningProgress:Object.fromEntries([...runtime.pickups.map(p=>[`p${p.object.userData.pickupId}`,p.object.userData.mineHits??0]),...runtime.stations.map((v,i)=>[`s${i}`,v.object.userData.mineHits??0])]), inversionTime: runtime.inversionTime, inversionMercyUsed:runtime.inversionMercyUsed, chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
+      return { layout:runtime.layout,powerExitOpened:runtime.layout==='powerexchange'&&runtime.doorOpening,environment:environment?{time:environment.userData.time,noise:environment.userData.noise}:undefined,lift:{...runtime.lift}, pickaxeLevel:runtime.pickaxeLevel,miningProgress:Object.fromEntries([...runtime.pickups.map(p=>[`p${p.object.userData.pickupId}`,p.object.userData.mineHits??0]),...runtime.stations.map((v,i)=>[`s${i}`,v.object.userData.mineHits??0])]), chaseState: runtime.chaseState ? {...runtime.chaseState} : null, room: runtime.room, ammo: runtime.ammo, battery: runtime.battery, crystals: { ...runtime.crystals },
         discovered: [...runtime.discovered], gunInfusion: runtime.gunInfusion, lightInfusion: runtime.lightInfusion,
         loreRoute:{...runtime.loreRoute},encounters:JSON.parse(JSON.stringify(runtime.encounters)),boons:[...runtime.boons],resonatorWorld:runtime.resonatorWorld,boonieMet:runtime.boonieMet,accessKeys: runtime.accessKeys, maxAmmo: runtime.maxAmmo, inventory: { ...runtime.inventory }, basdinos: runtime.basdinos,
         wardCharges: runtime.wardCharges, speedBoostRooms: runtime.speedBoostRooms, banishedUntil: { ...runtime.banishedUntil },
@@ -2275,7 +2244,7 @@ export default function IonGame() {
       if(!object)return false;
       if(runtime.mineSwing>0)return true;
       if(st?.needsShield&&runtime.inventory.resonationShield<1){notify("RESONATION SHIELD REQUIRED · SEARCH THE CABINET");return true;}
-      runtime.mineSwing=1;const total=st?.kind==='resonator'&&runtime.layout==='inversion'?1:miningHits(runtime.pickaxeLevel,Boolean(st)||runtime.chaseRoom||runtime.haidIniActive||runtime.noiseActive);
+      runtime.mineSwing=1;const total=miningHits(runtime.pickaxeLevel,Boolean(st)||runtime.chaseRoom||runtime.haidIniActive||runtime.noiseActive);
       object.userData.mineHits=(object.userData.mineHits??0)+1;
       runtime.audio?.pulse('step');object.scale.multiplyScalar(.94);
       if(object.userData.mineHits>=total){
@@ -2419,11 +2388,6 @@ export default function IonGame() {
       if(runtime.room===200){runtime.doorUnlocked=false;runtime.doorOpening=false;
         runtime.objective=runtime.paradoxWorld?"*200 · SURVIVE THE GRIN THEN ENTER THE RETURN RIFT":"Extraction signal acquired";
         updateDoorIndicator();return;}
-      if(runtime.layout==='inversion'){
-        runtime.doorUnlocked=runtime.activeResonators>=3&&runtime.mandatoryCollected;
-        runtime.objective=runtime.doorUnlocked?'PERS HAS FALLEN · SPRINT TO THE EXIT':`INVERSION · BREAK ANCHORS ${runtime.activeResonators}/3 · HIDE AT PURPLE LIGHT`;
-        updateDoorIndicator();return;
-      }
       if(isExperimentalRoom(runtime.layout)){
         runtime.doorUnlocked=runtime.activeResonators>=3&&runtime.mandatoryCollected;
         runtime.objective=runtime.doorUnlocked?'ROOM RESTORED · PRESSURE DOOR UNLOCKED':`${ROOM_TASKS[runtime.layout]} · ${runtime.activeResonators}/3${runtime.mandatoryCollected?'':' · RECOVER REQUIRED SPECIMEN'}`;
@@ -2477,7 +2441,6 @@ export default function IonGame() {
         else notify('FINISH THE CURRENT PRACTICE TASK FIRST');
         return;
       }
-      if(runtime.layout==='inversion')badge('secret','layout-inversion');
       if(runtime.encounters.voidDebt){buildRoom(Math.min(199,runtime.room+1));return;}
       if(runtime.loreRoute.phase==='redox'){
         if(runtime.room>=400){runtime.loreRoute.phase='ascended';runtime.loreRoute.door=1;runtime.ascendedWorld=true;runtime.ascendedDoor=1;runtime.chaseState=null;buildRoom(1);notify(":ASCENDED: · FIFTY DOORS");}
@@ -2577,7 +2540,7 @@ export default function IonGame() {
         return;
       }
       if (kind === "resonator") {
-        if(runtime.layout==='pressure'&&station&&!station.activated&&station.object.userData.roomNode!==runtime.activeResonators){notify('AIRLOCK ORDER · RELEASE '+(runtime.activeResonators+1)+' FIRST');return;}
+        if((runtime.layout==='pressure'||runtime.layout==='carousel')&&station&&!station.activated&&station.object.userData.roomNode!==runtime.activeResonators){notify('USE CONTROL '+(runtime.activeResonators+1)+' FIRST');return;}
         const environment=runtime.roomGroup.getObjectByName('experimental-room');
         if(runtime.layout==='dormitory'&&environment&&environment.userData.noise>55){notify('TOO LOUD · STAND STILL UNTIL THE DORMITORY SETTLES');return;}
 
@@ -2614,11 +2577,10 @@ export default function IonGame() {
         if(runtime.layout==='drownedlift'){notify('THE LIFT IS THE EXIT · REPAIR POWER AND BOARD IT');return;}
         if (runtime.noiseActive || runtime.chaseRoom && !runtime.doorUnlocked) {notify("RESONANCE LOCK · COMPLETE SPECIMENS AND RESONATORS");return;}
         if (runtime.haidIniActive && runtime.activeResonators < 30) { runtime.audio?.pulse("error"); notify("HAID-INI LOCKDOWN · CRYSTAL KEYS REJECTED"); return; }
-        if(runtime.layout==="inversion"&&!runtime.doorUnlocked){notify("BREAK ALL THREE ANCHORS · KEYS CANNOT RELEASE INVERSION");return;}
         if (!runtime.doorUnlocked && runtime.accessKeys > 0&&!runtime.boons.includes("nokeys")) { runtime.accessKeys -= 1; runtime.doorUnlocked = true; updateDoorIndicator(); notify("CRYSTAL KEY ACCEPTED"); }
         if (runtime.doorUnlocked) { runtime.doorOpening = true;
           if(runtime.ascendedWorld&&runtime.ascendedDoor===20&&runtime.loreRoute.phase!=='ascended'){runtime.ascendedCleared=true;runtime.objective="ASCENDED CLEARED · SHOOT PERS BEFORE CROSSING FOR THE SECRET TRIAL";}
-          else runtime.objective = "Proceed to the next room";
+          else runtime.objective = runtime.layout==='powerexchange' ? "MAIN POWER OFF · FOLLOW THE EMERGENCY BEACONS" : "Proceed to the next room";
           partyRef.current?.send({type:"action",room:runtime.room,action:"door"}); runtime.audio?.pulse("door"); }
         else { runtime.audio?.pulse("error"); notify(runtime.objective.toUpperCase()); }
       }
@@ -2757,7 +2719,7 @@ export default function IonGame() {
 
     function findInteraction() {
       const visible=(point:THREE.Vector3)=>{
-        if(!['maze','observation','inversion','grand'].includes(runtime.layout))return true;
+        if(!['maze','observation','grand','carousel','crystallung'].includes(runtime.layout))return true;
         const origin=runtime.player.clone(),target=point.clone();target.y+=.7;
         const ray=new THREE.Ray(origin,target.clone().sub(origin).normalize());const distance=origin.distanceTo(target);
         return !runtime.obstacles.some(box=>{const hit=ray.intersectBox(box,new THREE.Vector3());return hit&&hit.distanceTo(origin)<distance-.35;});
@@ -2774,7 +2736,7 @@ export default function IonGame() {
         if (distance < bestDistance && !(station.activated && (station.kind === "resonator" || station.kind === "cabinet" || station.kind === "noiseCore"))) { bestDistance = distance; runtime.nearest = { kind: "station", index };
           runtime.prompt = station.kind === 'resonator' && isExperimentalRoom(runtime.layout) ? `E / CLICK · ${runtime.layout==='greenhouse'?'CUT ROOT NODE':runtime.layout==='dormitory'?'SEARCH BUNK LOCKER':'RESTORE ROOM CONTROL'} ${(station.object.userData.roomNode??0)+1}` : station.kind === "liftPower" ? station.activated ? "LIFT RELAY RESTORED" : "E  REPAIR LIFT POWER RELAY" : station.kind === "liftConsole" ? "E  START DROWNED LIFT · WATER WILL RISE" : station.kind === "noiseCore" ? "NOISE · COLLECT THE OPEN CAPSULES" : station.kind === "lore" ? "E  OFFER VIAL OF SÁNG TO LORE" : station.kind === "voiddoor" ? "E  CHOOSE VOID PASSAGE" : station.kind === "voidoffering" ? "E  OFFER CRYSTALS TO VOID" : station.kind === "rainbow" ? "E  OPTIONAL: ENTER RESONATOR DOOR 300" : station.kind === "cabinet" ? "E  SEARCH STORAGE CABINET" : station.kind === "blood" ? "E  SCOOP BLOOD · EMPTY BOTTLE REQUIRED" : station.kind === "rift" ? runtime.paradoxWorld ? "E  RETURN THROUGH THE TEAR" : "E  FALL THROUGH THE TEAR"
             : station.kind === "trapdoor" ? runtime.chaseRoom ? "TRAPDOOR JAMMED · KEEP RUNNING" : runtime.haidIniActive ? runtime.hiding ? "E  EXIT · HAID-INI CAN ENTER" : "E  HIDE · UNSAFE FROM HAID-INI" : runtime.hiding ? "E  EXIT TRAPDOOR" : "E  HIDE IN TRAPDOOR"
-            : station.kind === "resonator" ? runtime.layout==='inversion'&&!station.activated ? "E / CLICK · PICKAXE · BREAK ANCHOR" : station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  EXTRACT · RESONATION SHIELD REQUIRED" : "E / CLICK · PICKAXE · MINE RESONATOR"
+            : station.kind === "resonator" ? station.activated ? "RESONATOR STABLE" : station.needsShield ? "E  EXTRACT · RESONATION SHIELD REQUIRED" : "E / CLICK · PICKAXE · MINE RESONATOR"
             : `E  USE ${station.kind.replace("infusionsmith", "INFUSIONSMITH").toUpperCase()}`; }
       });
       if (runtime.door) {
@@ -2803,9 +2765,8 @@ export default function IonGame() {
       }
       if(runtime.boons.includes("tremor"))runtime.yaw+=Math.sin(performance.now()*.003)*dt*.18;
       if(runtime.layout==='drownedlift'&&runtime.lift.ride>0){runtime.player.x=0;runtime.player.z=-runtime.roomLength/2+6;runtime.keysDown.clear();runtime.touchMove.x=0;runtime.touchMove.y=0;}
-      const inversion=runtime.layout==='inversion'?-1:1;
-      const forwardInput = inversion*((runtime.keysDown.has("KeyW") ? 1 : 0) - (runtime.keysDown.has("KeyS") ? 1 : 0) - runtime.touchMove.y);
-      const sideInput = inversion*((runtime.keysDown.has("KeyD") ? 1 : 0) - (runtime.keysDown.has("KeyA") ? 1 : 0) + runtime.touchMove.x);
+      const forwardInput = ((runtime.keysDown.has("KeyW") ? 1 : 0) - (runtime.keysDown.has("KeyS") ? 1 : 0) - runtime.touchMove.y);
+      const sideInput = ((runtime.keysDown.has("KeyD") ? 1 : 0) - (runtime.keysDown.has("KeyA") ? 1 : 0) + runtime.touchMove.x);
       const moving = Math.abs(forwardInput) + Math.abs(sideInput) > 0.08;
       const sprinting = moving && (runtime.keysDown.has("ShiftLeft") || runtime.keysDown.has("ShiftRight") || runtime.touchMove.sprint);
       const sprintSpeed = currentSprintSpeed();
@@ -2968,7 +2929,10 @@ export default function IonGame() {
         const root=runtime.roomGroup.getObjectByName('experimental-room');
         const moving=runtime.keysDown.has('KeyW')||runtime.keysDown.has('KeyS')||runtime.keysDown.has('KeyA')||runtime.keysDown.has('KeyD')||Math.hypot(runtime.touchMove.x,runtime.touchMove.y)>.1;
         const sprinting=runtime.keysDown.has('ShiftLeft')||runtime.keysDown.has('ShiftRight')||runtime.touchMove.sprint;
-        animateExperimentalRoom(runtime.roomGroup,runtime.layout,dt,runtime.activeResonators,moving,sprinting);
+        animateExperimentalRoom(runtime.roomGroup,runtime.layout,dt,runtime.activeResonators,moving,sprinting,runtime.doorOpening,runtime.player);
+        if(runtime.layout==='powerexchange'&&runtime.doorOpening){
+          runtime.roomGroup.traverse(object=>{if(object instanceof THREE.Light && !object.userData.emergency) object.visible=false;});
+        }
         if(root){
           const effect=roomTraversal(runtime.layout,runtime.player.x,runtime.player.z,runtime.roomLength,root.userData.time,runtime.activeResonators);
           if(effect.warning&&root.userData.warning!==effect.warning){notify(effect.warning);root.userData.warning=effect.warning;}
@@ -2982,7 +2946,6 @@ export default function IonGame() {
       }
       if(runtime.layout==='flooded')animateFloodedScenery(runtime.roomGroup,performance.now()*.001);
       if(training)updateTraining(dt);
-      if(runtime.layout==='inversion')updateInversion(dt);
       if(runtime.resonatorWorld)updateResonatorTrial(dt);
       runtime.spawnGrace = Math.max(0, runtime.spawnGrace - dt);
       if(runtime.noiseActive){
@@ -3075,7 +3038,7 @@ export default function IonGame() {
       runtime.flickerLights.forEach((light, index) => { const failure = Math.sin(performance.now() * 0.019 + index * 9.4) > 0.91 + runtime.tier * 0.006;
         light.intensity = failure ? 0.35 : 12 + Math.sin(performance.now() * 0.003 + index) * 3; });
       if (runtime.doorOpening) {
-        if (!runtime.doorCreaked) { runtime.doorCreaked = true; runtime.audio?.creak(); if (runtime.doorPers && runtime.layout!=="inversion" && !runtime.paradoxWorld && !runtime.paradoxRift) runtime.doorPers.visible = true; }
+        if (!runtime.doorCreaked) { runtime.doorCreaked = true; runtime.audio?.creak(); if (runtime.doorPers && !runtime.paradoxWorld && !runtime.paradoxRift) runtime.doorPers.visible = true; }
         runtime.doorProgress = Math.min(1, runtime.doorProgress + dt * 0.2*(runtime.boons.includes("quickgate")?1.8:1)*(runtime.boons.includes("rustgate")?.6:1));
         const easedLift = THREE.MathUtils.smootherstep(runtime.doorProgress, 0, 1);
         const lift = easedLift * (runtime.roomHeight + 2.8);

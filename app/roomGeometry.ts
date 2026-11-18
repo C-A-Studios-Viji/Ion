@@ -36,11 +36,7 @@ export function buildRoomGeometry(group:THREE.Group,type:RoomType,width:number,l
   addFloodedScenery(group,width,length);
  }
  if(type==='collapsed')for(let i=0;i<5;i++){const slab=box(1,.8,2,(i%2?1:-1)*(width/2-2),.5,-length/2+6+i*5);slab.rotation.z=(i%2?1:-1)*.4;}
- if(type==='inversion'){
-  for(let i=0;i<5;i++){const furniture=box(2,.7,1.5,(i%2?1:-1)*3,height-.6,-length/2+5+i*5);furniture.rotation.z=Math.PI;}
-  for(const x of [-3,3])for(const z of [-length*.2,length*.2])box(2,2.3,1,x,1.15,z,true);
- }
  // Emissive route markers remain visible with an empty flashlight.
- for(let i=0;i<7;i++){const m=box(.18,.08,.5,(i%2?1:-1)*(width/2-.4),.3,length/2-3-i*(length-6)/6,false,new THREE.MeshStandardMaterial({color:0x44eedd,emissive:0x44eedd,emissiveIntensity:2}));m.userData.routeMarker=true;}
+ if(type!=='powerexchange')for(let i=0;i<7;i++){const m=box(.18,.08,.5,(i%2?1:-1)*(width/2-.4),.3,length/2-3-i*(length-6)/6,false,new THREE.MeshStandardMaterial({color:0x44eedd,emissive:0x44eedd,emissiveIntensity:2}));m.userData.routeMarker=true;}
  return obstacles;
 }

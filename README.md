@@ -209,9 +209,9 @@ The timeout defaults can be overridden for a controlled canary with `SITES_INSTA
 
 ## Variable rooms
 
-Ordinary doors can lead to Grand Chambers, Duplexes, Multi-floor Facilities, Basements, Crystal Mazes, Collapsed Rooms, Flooded Chambers, Observation Rooms or INVERSION. Ramps connect elevated floors, maze gaps have glowing route markers, and flooded areas slow movement outside walkways. Special chase, Hub and dimension rooms retain their dedicated courses.
+Ordinary doors can lead to Grand Chambers, Duplexes, Multi-floor Facilities, Basements, Crystal Mazes, Collapsed Rooms, Flooded Chambers, Observation Rooms and the rotating facility layouts. Ramps connect elevated floors, maze gaps have glowing route markers, and flooded areas slow movement outside walkways. Special chase, Hub and dimension rooms retain their dedicated courses.
 
-INVERSION swaps W/S and A/D (including touch movement). Purple light warns of Pers’s strike: hide behind a cabinet or in a trapdoor. Break three crystal anchors to release the exit, then escape his pursuit to qualify for the Ultra badge “Wrong Way Home.” Existing daily badge permission still applies.
+Power Exchange, Quarantine Carousel, and Crystal Lung rotate through the former INVERSION slot. Light the emergency beacons before opening the Power Exchange exit, rotate the Carousel bulkheads in order, and time your crossings between the Crystal Lung’s pulses. “Wrong Way Home” remains in the badge catalog as a legacy award.
 
 The archive contains exactly 250 badges, with 100 tutorials hidden. Retired Boon trials are preserved in browser save history; retained badges and counters carry forward.
 
