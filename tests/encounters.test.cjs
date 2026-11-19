@@ -40,8 +40,8 @@ function gameHarness(authorized=true,network=null){
     runtime.player.copy(object.position).add(new THREE.Vector3(0,1.65,0));step(.3);act.interact();
     // Interact through the actual pickaxe animation until a deposit breaks.
     for(let i=0;i<3;i++){
-      const pickup=runtime.pickups.find(p=>p.object===object),station=runtime.stations.find(v=>v.object===object);
-      if(!(pickup&&(pickup.kind==='crystal'||object.userData.sealedCapsule))&&!(station?.kind==='resonator'&&!station.activated))break;
+      const pickup=runtime.pickups.find(p=>p.object===object);
+      if(!(pickup&&(pickup.kind==='crystal'||object.userData.sealedCapsule)))break;
       step(.3);act.interact();
     }
   };
@@ -85,26 +85,34 @@ test('seven five-room scheduled chases and exact 2% Remetons boundary',()=>{
   const state={start:10,type:'remetons'};assert.equal(rules.chaseForRoom(14,state,.5).start,10);assert.equal(rules.chaseForRoom(15,state,.5),null);
 });
 
-test('actual chase rooms contain reachable specimens and four resonators; keys cannot bypass them',async()=>{
+test('Blob chase gates require reachable specimens and milestone crystals without resonators',async()=>{
   const h=gameHarness();await Promise.resolve();await Promise.resolve();
   for(const room of [25,26,28,50,75,179]){
     h.enter(room);const r=h.runtime;r.enemies.forEach(e=>{if(e.kind!=='noise')e.alive=false;});
-    assert.equal(r.chaseRoom,true);assert.equal(r.requiredResonators,4);assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,5);
-    assert(r.pickups.filter(p=>p.kind==='specimen').every(p=>!p.object.userData.sealedCapsule));assert(!r.stations.some(s=>s.kind==='noiseCore'));
-    const stations=r.stations.filter(s=>s.kind==='resonator');assert.equal(stations.length,4);
-    assert(stations.every(s=>s.object.userData.sealedResonator));
-    for(const p of [...stations,...r.pickups.filter(p=>p.kind==='specimen'||p.mandatory)]){
+    assert.equal(r.chaseRoom,true);
+    assert.equal(r.requiredResonators,0);
+    assert(!r.stations.some(s=>s.kind==='resonator'||s.kind==='rainbow'||s.kind==='noiseCore'));
+    const specimens=r.pickups.filter(p=>p.kind==='specimen');
+    const milestones=r.pickups.filter(p=>p.mandatory);
+    assert.equal(specimens.length,5);
+    assert(specimens.every(p=>!p.object.userData.sealedCapsule));
+    for(const p of [...specimens,...milestones]){
       const box=new THREE.Box3().setFromCenterAndSize(p.object.position.clone().setY(1.2),new THREE.Vector3(.68,1.5,.68));
       assert(!r.obstacles.some(o=>o.intersectsBox(box)),`blocked task in room ${room}`);
     }
-    r.nearest={kind:'door'};h.act.interact();assert.equal(r.doorUnlocked,false);assert.equal(r.accessKeys,10);
-    for(const p of [...r.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);
-    h.useAt(r.stations.find(s=>s.kind==='cabinet').object);
+    for(const p of specimens.slice(0,4))h.useAt(p.object);
+    r.nearest={kind:'door'};h.act.interact();
+    assert.equal(r.noiseCount,4);
+    assert.equal(r.doorUnlocked,false);
+    assert.equal(r.accessKeys,10);
+    h.useAt(specimens[4].object);
     assert.equal(r.noiseCount,5);
-    assert.equal(r.noiseCount,5);assert.equal(r.noiseActive,false);assert.equal(r.doorUnlocked,false);
-    for(const s of stations)h.useAt(s.object);
-    for(const p of [...r.pickups.filter(p=>p.mandatory)])h.useAt(p.object);
-    assert.equal(r.activeResonators,4,`resonators in ${room}`);assert.equal(r.doorUnlocked,true,`door in ${room}`);assert.equal(r.doorOpening,true,`opening in ${room}`);
+    assert.equal(r.noiseActive,false);
+    assert.equal(r.doorUnlocked,milestones.length===0);
+    for(const p of milestones)h.useAt(p.object);
+    assert.equal(r.activeResonators,0);
+    assert.equal(r.doorUnlocked,true,`door in ${room}`);
+    assert.equal(r.doorOpening,true,`opening in ${room}`);
   }
 });
 
@@ -124,7 +132,11 @@ test('Remetons cutscene holds timers, transforms Pers, then starts pursuit',asyn
   const r=h.runtime;assert.equal(r.infectionTime,0);const time=r.noiseTime;
   h.step(4);assert.equal(r.noiseTime,time);assert(r.infectionActors.getObjectByName('infected-pers'));
   h.step(5);assert.equal(r.infectionTime,-1);assert.equal(r.infectionActors,null);assert(r.enemies.some(e=>e.kind==='remetons'&&e.alive));
-  assert.equal(r.chaseState.start,10);assert.equal(r.requiredResonators,4);
+  assert.equal(r.chaseState.start,10);assert.equal(r.requiredResonators,0);
+  assert(!r.stations.some(s=>s.kind==='resonator'||s.kind==='rainbow'));
+  r.enemies.find(e=>e.kind==='remetons').alive=false;
+  for(const p of [...r.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);
+  assert.equal(r.noiseCount,5);assert.equal(r.doorOpening,true);
 });
 
 test('every monster has a distinct smooth 3D silhouette and valid animation',()=>{
@@ -275,8 +287,11 @@ test('shielded resonators require reusable protection and their room cabinet sup
  assert(shielded);const r=h.runtime;r.enemies.forEach(e=>e.alive=false);
  r.nearest={kind:'station',index:r.stations.indexOf(shielded)};h.act.interact();assert.equal(shielded.activated,false);
  const cabinet=r.stations.find(s=>s.kind==='cabinet');assert.equal(cabinet.object.userData.loot.resonationShield,1);
- h.useAt(cabinet.object);h.useAt(shielded.object);
- assert.equal(shielded.activated,true);assert.equal(r.inventory.resonationShield,1);
+ h.useAt(cabinet.object);
+ const ammo=r.ammo;
+ r.nearest={kind:'station',index:r.stations.indexOf(shielded)};h.act.fire();
+ assert.equal(shielded.activated,true);assert.equal(r.ammo,ammo);
+ assert.equal(shielded.object.userData.mineHits,undefined);assert.equal(r.inventory.resonationShield,1);
 });
 
  test('daily codes verify digest, date, invalid input and midnight expiry',async()=>{
@@ -875,13 +890,19 @@ test('branching mazes are deterministic connected trees with dead ends and opaqu
 test('Door 27 is the large roofed Blob maze with reachable ordered objectives and corridor pursuit',async()=>{
  const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(27,{start:25,type:'blob'});const r=h.runtime;
  assert.equal(r.layout,'maze');assert.equal(r.roomWidth,54);assert.equal(r.roomLength,90);assert(r.spawnGrace>=9);
- assert.equal(r.requiredResonators,4);assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,5);
+ assert.equal(r.requiredResonators,0);assert(!r.stations.some(s=>s.kind==='resonator'));
+ const specimens=r.pickups.filter(p=>p.kind==='specimen');assert.equal(specimens.length,5);
  assert(r.roomGroup.getObjectByName('sealed-maze-roof'));assert(r.noiseTime>180);
  const {mazeCell,mazePoint}=h.load(path.join(root,'app/maze.ts'));
- for(const o of [...r.stations.filter(v=>v.kind==='resonator').map(v=>v.object),...r.pickups.filter(v=>v.kind==='specimen'||v.mandatory).map(v=>v.object)])assert(r.maze.route.includes(mazeCell(r.maze,o.position.x,o.position.z)));
+ const objectiveCells=specimens.map(({object})=>r.maze.route.indexOf(mazeCell(r.maze,object.position.x,object.position.z)));
+ assert(objectiveCells.every((position,i)=>position>0&&(i===0||position>objectiveCells[i-1])));
  const blob=r.enemies.find(e=>e.kind==='blob');assert(blob);r.spawnGrace=0;
  const destination=mazePoint(r.maze,r.maze.route[Math.min(8,r.maze.route.length-1)]);r.player.set(destination.x,1.65,destination.z);
  for(let i=0;i<80&&!r.dead;i++){h.step(.05);const box=new THREE.Box3().setFromCenterAndSize(blob.object.position.clone().add(new THREE.Vector3(0,1,0)),new THREE.Vector3(.3,1.5,.3));assert(!r.obstacles.some(b=>b.intersectsBox(box)),'Blob crossed maze rock');}
+ assert.equal(r.dead,false);
+ blob.alive=false;
+ for(const p of specimens)h.useAt(p.object);
+ assert.equal(r.doorOpening,true);
 });
 
 test('Drowned Lift needs three relays, persists its flood and carries a boarded survivor to the next door',async()=>{
