@@ -1905,10 +1905,13 @@ export default function IonGame() {
         runtime.pickups.push({object,kind:'crystal',crystal:key,mandatory:false});
       };
       mineableFormations.forEach(({object,key})=>registerMineral(object,key));
-      // Keep deposits and required chase specimens outside the whirlpools' pull.
-      const protectedPickups = runtime.pickups.filter(p => p.kind === "crystal" || p.kind === "specimen");
+      // Keep whirlpools away from deposits, chase specimens and room controls.
+      const protectedTargets = [
+        ...runtime.pickups.filter(p => p.kind === "crystal" || p.kind === "specimen"),
+        ...runtime.stations.filter(station => station.kind === "resonator"),
+      ];
       runtime.hazards=runtime.hazards.filter(h=>{
-        const blocked=protectedPickups.some(({object})=>Math.hypot(object.position.x-h.object.position.x,object.position.z-h.object.position.z)<h.radius+1);
+        const blocked=protectedTargets.some(({object})=>Math.hypot(object.position.x-h.object.position.x,object.position.z-h.object.position.z)<h.radius+1);
         if(blocked){runtime.roomGroup.remove(h.object);disposeModel(h.object);}return !blocked;
       });
       // Bedrock is present from the first room, including workshops and halls.
