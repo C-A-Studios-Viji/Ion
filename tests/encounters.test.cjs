@@ -164,15 +164,22 @@ test('rounded props retain finite dimensions, smooth normals and interleaved UVs
   m.onBeforeCompile(shader);assert(shader.fragmentShader.includes('float bands'));assert(shader.uniforms.ionLow);assert(!shader.fragmentShader.includes('undefined'));
 });
 
-test('Blob speed rises gently and matches sprint speed in the fifth room',async()=>{
-  const h=gameHarness();const {blobChaseSpeed}=h.load(path.join(root,'app/encounters.ts'));const chase={start:25,type:'blob'};
-  assert(Math.abs(blobChaseSpeed(25,chase,5.1)-5.1*.72)<1e-9);
-  assert(Math.abs(blobChaseSpeed(26,chase,5.1)-5.1*.79)<1e-9);
-  assert(Math.abs(blobChaseSpeed(27,chase,5.1)-5.1*.86)<1e-9);
-  assert(Math.abs(blobChaseSpeed(28,chase,5.1)-5.1*.93)<1e-9);
-  assert(Math.abs(blobChaseSpeed(29,chase,5.1)-5.1)<1e-9);
-  await Promise.resolve();await Promise.resolve();h.enter(29);
-  const blob=h.runtime.enemies.find(e=>e.kind==='blob');assert(blob);assert.equal(blob.speed,5.1);assert.equal(h.runtime.spawnGrace,2);
+test('both pursuers speed up by stage and stay below sprint speed in the final room',async()=>{
+  const h=gameHarness();const {blobChaseSpeed}=h.load(path.join(root,'app/encounters.ts'));
+  await Promise.resolve();await Promise.resolve();
+  for(const chase of [{start:25,type:'blob'},{start:10,type:'remetons'}]){
+    const sprint=5.1;
+    const speeds=Array.from({length:5},(_,i)=>blobChaseSpeed(chase.start+i,chase,sprint));
+    assert(speeds.every((speed,i)=>speed<sprint&&(i===0||speed>speeds[i-1])));
+    assert(Math.abs(speeds[4]-sprint*.9)<1e-9);
+    h.enter(chase.start+4,chase);
+    const r=h.runtime,pursuer=r.enemies.find(e=>e.kind===chase.type);
+    assert(pursuer);assert.equal(r.spawnGrace,2);
+    r.spawnGrace=0;pursuer.object.position.set(0,0,12);r.player.set(0,1.65,0);
+    const start=pursuer.object.position.z;
+    h.step(.05);
+    assert(Math.abs(start-pursuer.object.position.z-sprint*.9*.05)<1e-8);
+  }
 });
 
 test('a fresh descent cannot load an unreached stale Room 25 checkpoint',async()=>{
@@ -861,11 +868,23 @@ test('safe practice teaches the real tasks, protects saves and restores the paus
 });
 
 
-test('legacy cabinet capsule progress resumes with only the outstanding open capsules',async()=>{
+test('legacy chase saves ignore resonator progress and restore the remaining open capsules',async()=>{
  const h=gameHarness();await Promise.resolve();await Promise.resolve();h.act.startNewSlot(0);h.act.confirmBoons();h.enter(25);h.act.saveRun();
- const slots=JSON.parse(h.saved.get('ion-saves-v1'));slots[0].state.noiseCount=1;slots[0].state.noiseActive=true;slots[0].state.removedPickups=[];h.saved.set('ion-saves-v1',JSON.stringify(slots));
- h.act.loadSlot(0);h.act.confirmBoons();assert.equal(h.runtime.pickups.filter(p=>p.kind==='specimen').length,4);
- h.runtime.enemies.forEach(e=>e.alive=false);for(const p of [...h.runtime.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);assert.equal(h.runtime.noiseCount,5);assert.equal(h.runtime.noiseActive,false);
+ const slots=JSON.parse(h.saved.get('ion-saves-v1'));
+ Object.assign(slots[0].state,{noiseCount:1,noiseActive:false,removedPickups:[],activatedResonators:[0,1,2,3],haidIniActive:true});
+ h.saved.set('ion-saves-v1',JSON.stringify(slots));
+ h.act.loadSlot(0);h.act.confirmBoons();
+ const r=h.runtime;
+ assert.equal(r.haidIniActive,false);
+ assert(!r.stations.some(s=>s.kind==='resonator'));
+ assert.equal(r.pickups.filter(p=>p.kind==='specimen').length,4);
+ assert.equal(r.noiseActive,true);assert.equal(r.doorUnlocked,false);
+ // Even stale resonator counters cannot hold the gate closed.
+ r.requiredResonators=4;
+ r.enemies.forEach(e=>e.alive=false);
+ for(const p of [...r.pickups.filter(p=>p.kind==='specimen')])h.useAt(p.object);
+ assert.equal(r.noiseCount,5);assert.equal(r.noiseActive,false);
+ assert.equal(r.doorOpening,true);assert.match(r.objective,/^CHASE GATE OPEN/);
 });
 
 
@@ -903,6 +922,10 @@ test('Door 27 is the large roofed Blob maze with reachable ordered objectives an
  blob.alive=false;
  for(const p of specimens)h.useAt(p.object);
  assert.equal(r.doorOpening,true);
+ const exit=mazePoint(r.maze,r.maze.route.at(-1));
+ r.player.set(exit.x,1.65,exit.z);r.yaw=0;
+ h.step(5.1);r.keysDown.add('KeyW');h.step(2);r.keysDown.delete('KeyW');
+ assert.equal(r.room,28,'walking through the opened maze gate advances the chase');
 });
 
 test('Drowned Lift needs three relays, persists its flood and carries a boarded survivor to the next door',async()=>{

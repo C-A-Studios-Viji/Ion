@@ -1,9 +1,12 @@
 export type ChaseType = "blob" | "remetons";
 export type ChaseState = { start: number; type: ChaseType };
-/** The Blob closes the gap a little faster in each chase room and matches sprint speed in room five. */
-export function blobChaseSpeed(room: number, chase: ChaseState, sprintSpeed = 5.1) {
+export const PURSUER_SPEED_SCALE = 0.9;
+
+/** Both pursuers speed up by stage while leaving room to outrun them. */
+export function blobChaseSpeed(room: number, chase: ChaseState, sprintSpeed = 5.1, maze = false) {
   const stage = Math.min(5, Math.max(1, room - chase.start + 1));
-  return sprintSpeed * (0.72 + (stage - 1) * 0.07);
+  const pace = maze ? 0.66 : 0.72 + (stage - 1) * 0.07;
+  return sprintSpeed * pace * PURSUER_SPEED_SCALE;
 }
 export function scheduledChase(room: number): ChaseState | null {
   const start = Math.floor(room / 25) * 25;
@@ -23,8 +26,7 @@ export function chaseRoomRules(room: number, chase: ChaseState) {
   const stage = room - chase.start + 1;
   const level = Math.min(7, Math.max(1, Math.floor(chase.start / 25)));
   const length = 70 + level * 5 + stage * 2;
-  return {stage, level, length, specimens: 5,
-    speed: 3.15 + level * 0.105 + stage * 0.045,
+  return {stage, level, length,
     noiseSeconds: Math.ceil(length / 4.1 + 20),
     barriers: 5 + Math.floor(level / 2) + stage};
 }
